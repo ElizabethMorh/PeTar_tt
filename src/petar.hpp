@@ -98,6 +98,7 @@ public:
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
     IOParams<std::string> fname_tt;   // filename for tidal tensor data
+    IOParams<std::string> external_force_mode; // "none", "galpy", "tidal_tensor"
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
 #endif
@@ -214,6 +215,7 @@ public:
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
                      fname_tt(input_par_store, "tt.dat", "tidal-tensor-file", "Filename for tidal tensor data"),
+                     external_force_mode(input_par_store, "none", "external-force-mode", "Type of external force: none, galpy, tidal_tensor"),
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
                      print_flag(false), update_changeover_flag(false), update_rsearch_flag(false) {}
 
@@ -1037,28 +1039,24 @@ TidalTensorManager tidal_tensor_mgr; // <--- new for the tt manager
 #endif
     }
 
-    //! calculate external force
-    void externalForce() {
+//! calculate external force
+void externalForce() {
 #ifdef PROFILE
-        profile.other.start();
+    profile.other.start();
 #endif
 
-    // Extending the external force calculation, tidal tensor
-    // Update tidal tensor to current time
-    tidal_tensor_mgr.update(stat.time);
+    // Extending the external force calculation
+    // Switch between tidal tensor and GALPY
+    if (input_parameters.external_force_mode.value == "tidal_tensor") {
+        tidal_tensor_mgr.update(stat.time); 
 
-    // Apply the tensor acceleration to all local particles
-    for (PS::S32 i = 0; i < system_soft.getNumberOfParticleLocal(); i++) {
-        auto &p = system_soft[i];
-        PS::F64vec acc_tt = tidal_tensor_mgr.applyTensor(p.pos);
-        p.acc += acc_tt;
+        // Apply the tensor acceleration to all local particles
+        for (PS::S32 i = 0; i < system_soft.getNumberOfParticleLocal(); i++) {
+            auto &p = system_soft[i];
+            PS::F64vec acc_tt = tidal_tensor_mgr.applyTensor(p.pos);
+            p.acc += acc_tt;
+        }
     }
-
-#ifdef PROFILE
-    profile.other.end();
-#endif
-}
-
 
 #ifdef GALPY
         // external force and potential
