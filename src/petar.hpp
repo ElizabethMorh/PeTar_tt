@@ -3078,6 +3078,7 @@ void externalForce() {
         
         // Loading the tt.dat
         std::string tt_filename = input_parameters.fname_tt;
+        // removed: tstar not defined; using direct tt.dat times
         tidal_tensor_mgr.loadFromFile(tt_filename);
 
         // units
