@@ -17,7 +17,6 @@ public:
 private:
     std::vector<TensorSnapshot> snapshots;
     double current_time;
-    double TSTAR; // PeTar's internal time unit
 
 public:
     TidalTensorManager() : current_time(0.0) {}
