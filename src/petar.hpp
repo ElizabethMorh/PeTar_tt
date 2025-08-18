@@ -3078,8 +3078,7 @@ void externalForce() {
         
         // Loading the tt.dat
         std::string tt_filename = input_parameters.fname_tt;
-        double TSTAR = input_parameters.tstar.value;
-        tidal_tensor_mgr.loadFromFile(tt_filename, TSTAR);
+        tidal_tensor_mgr.loadFromFile(tt_filename);
 
         // units
         if (input_parameters.unit_set.value==1) {
