@@ -17,11 +17,14 @@ public:
 private:
     std::vector<TensorSnapshot> snapshots;
     double current_time;
+    double TSTAR; // PeTar's internal time unit
 
 public:
-    TidalTensorManager() : current_time(0.0) {}
+    TidalTensorManager() : current_time(0.0), TSTAR(1.0) {}
 
-    void loadFromFile(const std::string &filename) {snapshots.clear();
+    void loadFromFile(const std::string &filename, double tstar) {
+        TSTAR = tstar;
+        snapshots.clear();
 
         FILE *fp = fopen(filename.c_str(), "r");
         if (!fp) {
@@ -38,7 +41,7 @@ public:
             if (sscanf(line, "%lf %lf %lf %lf %lf %lf %lf",
                        &t, &Txx, &Txy, &Txz, &Tyy, &Tyz, &Tzz) == 7) {
                 TensorSnapshot snap;
-                snap.time = t * timeScale; // convert to PeTar units
+                snap.time = t; // convert to PeTar units
                 snap.T[0][0] = Txx; snap.T[0][1] = Txy; snap.T[0][2] = Txz;
                 snap.T[1][0] = Txy; snap.T[1][1] = Tyy; snap.T[1][2] = Tyz;
                 snap.T[2][0] = Txz; snap.T[2][1] = Tyz; snap.T[2][2] = Tzz;
