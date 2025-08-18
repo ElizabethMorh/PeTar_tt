@@ -20,11 +20,9 @@ private:
     double TSTAR; // PeTar's internal time unit
 
 public:
-    TidalTensorManager() : current_time(0.0), TSTAR(1.0) {}
+    TidalTensorManager() : current_time(0.0) {}
 
-    void loadFromFile(const std::string &filename, double tstar) {
-        TSTAR = tstar;
-        snapshots.clear();
+    void loadFromFile(const std::string &filename) {snapshots.clear();
 
         FILE *fp = fopen(filename.c_str(), "r");
         if (!fp) {
