@@ -3077,8 +3077,8 @@ void externalForce() {
         std::cout<<std::setprecision(WRITE_PRECISION);
         
         // Loading the tt.dat
-        std::string tt_filename = input_parameters.fname_tt.getValue();
-        tidal_tensor_mgr.loadFromFile(tt_filename.c_str());
+        std::string tt_filename = input_parameters.fname_tt;
+        tidal_tensor_mgr.loadFromFile(tt_filename);
 
         // units
         if (input_parameters.unit_set.value==1) {
