@@ -8,6 +8,8 @@
 #include <cmath>
 #include <iostream>
 
+const double TSTAR = 0.00449830997959438; // G in PeTar astro units
+
 // PeTar uses PS::F64vec for vectors
 #ifndef PS_F64VEC_DEFINED
 #define PS_F64VEC_DEFINED
@@ -37,6 +39,12 @@ private:
     bool loaded = false;
     PS::F64vec ref_point{0.0,0.0,0.0};
 
+    // Header values
+    int NBTT = 0;
+    double TTUNIT = 0.0;
+    double TTOFFSET = 0.0;
+    double scale_fac = 1.0;
+
 public:
     TidalTensorManager() {
         interp.time = 0.0;
@@ -55,9 +63,6 @@ public:
             return false;
         }
 
-        // Read header: NBTT TTUNIT TTOFFSET
-        int NBTT = 0;
-        double TTUNIT = 0.0, TTOFFSET = 0.0;
         if (std::fscanf(fp, "%d %lf %lf", &NBTT, &TTUNIT, &TTOFFSET) != 3) {
             std::cerr << "[TT] ERROR: failed to read header (NBTT TTUNIT TTOFFSET)\n";
             std::fclose(fp);
@@ -69,6 +74,9 @@ public:
             std::fclose(fp);
             return false;
         }
+
+        // scaling factor for tensors (NBODY6 logic)
+        scale_fac = (TSTAR / TTUNIT) * (TSTAR / TTUNIT);
 
         // pre-reserve
         snapshots.reserve(std::max(1, NBTT));
@@ -93,34 +101,26 @@ public:
                                     &vals[3], &vals[4], &vals[5],
                                     &vals[6], &vals[7], &vals[8]);
 
+            TensorSnapshot s;
             if (nread == 10) {
-                TensorSnapshot s;
-                // scale time: TTTIME = t * (TTUNIT/TSTAR) + TTOFFSET/TSTAR  (NBODY6 logic)
                 s.time = t * (TTUNIT / TSTAR) + (TTOFFSET / TSTAR);
-                // scale tensor: TTENS *= (TSTAR / TTUNIT)^2
-                double fac = (TSTAR / TTUNIT) * (TSTAR / TTUNIT);
-                s.T[0][0] = vals[0] * fac; s.T[0][1] = vals[1] * fac; s.T[0][2] = vals[2] * fac;
-                s.T[1][0] = vals[3] * fac; s.T[1][1] = vals[4] * fac; s.T[1][2] = vals[5] * fac;
-                s.T[2][0] = vals[6] * fac; s.T[2][1] = vals[7] * fac; s.T[2][2] = vals[8] * fac;
+                s.T[0][0] = vals[0] * scale_fac; s.T[0][1] = vals[1] * scale_fac; s.T[0][2] = vals[2] * scale_fac;
+                s.T[1][0] = vals[3] * scale_fac; s.T[1][1] = vals[4] * scale_fac; s.T[1][2] = vals[5] * scale_fac;
+                s.T[2][0] = vals[6] * scale_fac; s.T[2][1] = vals[7] * scale_fac; s.T[2][2] = vals[8] * scale_fac;
                 snapshots.push_back(s);
             } else {
-                // try 7-value symmetric format: time Txx Txy Txz Tyy Tyz Tzz
-                double t2, a,b,c,d,e,f;
-                int n7 = std::sscanf(linebuf, "%lf %lf %lf %lf %lf %lf %lf", &t2, &a,&b,&c,&d,&e,&f);
+                double t2,a,b,c,d,e,f;
+                int n7 = std::sscanf(linebuf, "%lf %lf %lf %lf %lf %lf %lf", &t2,&a,&b,&c,&d,&e,&f);
                 if (n7==7) {
-                    TensorSnapshot s;
                     s.time = t2 * (TTUNIT / TSTAR) + (TTOFFSET / TSTAR);
-                    double fac = (TSTAR / TTUNIT) * (TSTAR / TTUNIT);
-                    // interpret as: t, Txx, Txy, Txz, Tyy, Tyz, Tzz (common symmetric 6 values)
-                    s.T[0][0] = a * fac; s.T[0][1] = b * fac; s.T[0][2] = c * fac;
-                    s.T[1][0] = b * fac; s.T[1][1] = d * fac; s.T[1][2] = e * fac;
-                    s.T[2][0] = c * fac; s.T[2][1] = e * fac; s.T[2][2] = f * fac;
+                    s.T[0][0] = a * scale_fac; s.T[0][1] = b * scale_fac; s.T[0][2] = c * scale_fac;
+                    s.T[1][0] = b * scale_fac; s.T[1][1] = d * scale_fac; s.T[1][2] = e * scale_fac;
+                    s.T[2][0] = c * scale_fac; s.T[2][1] = e * scale_fac; s.T[2][2] = f * scale_fac;
                     snapshots.push_back(s);
                 } else {
                     std::cerr << "[TT] WARNING: unrecognized line format in tt.dat, skipping line:\n  '"
                               << linebuf << "'\n";
-                    --k; // don't count this line
-                    continue;
+                    --k; continue;
                 }
             }
         }
@@ -140,14 +140,14 @@ public:
         loaded = true;
 
         std::cerr << "[TT] Loaded " << snapshots.size() << " snapshots; time range: "
-                  << snapshots.front().time << " -> " << snapshots.back().time << " (PeTar time units)\n";
+                  << snapshots.front().time << " -> " << snapshots.back().time << " (PeTar units)\n"
+                  << "      TTUNIT=" << TTUNIT << ", TTOFFSET=" << TTOFFSET << ", TSTAR=" << TSTAR << "\n"
+                  << "      Tensor scale factor=" << scale_fac << "\n";
         return true;
     }
 
     // Set the reference point r0(t). Default is origin.
-    void setReference(const PS::F64vec &r0) {
-        ref_point = r0;
-    }
+    void setReference(const PS::F64vec &r0) { ref_point = r0; }
 
     // Update internal interpolated tensor for the requested time.
     // This does linear interpolation and clamps outside the range.
@@ -203,13 +203,15 @@ public:
         return r;
     }
 
-    // Utility: get time range
     bool getTimeRange(double &tmin, double &tmax) const {
         if (!loaded) return false;
         tmin = snapshots.front().time; tmax = snapshots.back().time; return true;
     }
 
-    // number of snapshots
     size_t size() const { return snapshots.size(); }
+
+    double getTTUnit() const { return TTUNIT; }
+    double getTTOffset() const { return TTOFFSET; }
+    double getScaleFactor() const { return scale_fac; }
 };
 
