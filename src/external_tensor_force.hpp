@@ -1,109 +1,215 @@
 #pragma once
-#include <string>
 #include <vector>
-#include <cmath>
+#include <string>
 #include <cstdio>
 #include <cstdlib>
-#include <cctype>
-#include "particle_simulator.hpp"
+#include <cstring>
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+
+// PeTar uses PS::F64vec for vectors
+#ifndef PS_F64VEC_DEFINED
+#define PS_F64VEC_DEFINED
+namespace PS {
+    struct F64vec {
+        double x, y, z;
+        F64vec() : x(0.0), y(0.0), z(0.0) {}
+        F64vec(double _x, double _y, double _z) : x(_x), y(_y), z(_z) {}
+        F64vec operator-(const F64vec &o) const { return F64vec(x-o.x, y-o.y, z-o.z); }
+        F64vec operator+(const F64vec &o) const { return F64vec(x+o.x, y+o.y, z+o.z); }
+        PS::F64vec& operator+=(const PS::F64vec &o) { x+=o.x; y+=o.y; z+=o.z; return *this; }
+    };
+}
+#endif
 
 class TidalTensorManager {
 public:
     struct TensorSnapshot {
-        double time;   // time in PeTar units
-        double T[3][3]; // tidal tensor components
+        double time;    // time in PeTar units (after scaling)
+        double T[3][3]; // full 3x3 tensor already scaled to PeTar units
     };
 
 private:
     std::vector<TensorSnapshot> snapshots;
-    double current_time;
+    double last_query_time = 0.0;
+    TensorSnapshot interp; // last interpolated tensor
+    bool loaded = false;
+    PS::F64vec ref_point{0.0,0.0,0.0};
 
 public:
-    TidalTensorManager() : current_time(0.0) {}
+    TidalTensorManager() {
+        interp.time = 0.0;
+        for(int i=0;i<3;i++) for(int j=0;j<3;j++) interp.T[i][j]=0.0;
+    }
 
-    void loadFromFile(const std::string &filename) {snapshots.clear();
+    bool isLoaded() const { return loaded; }
 
-        FILE *fp = fopen(filename.c_str(), "r");
+    // loadFromFile: read nbtt, ttunit, ttoffset and NBODY6-style table
+    // TSTAR: PeTar time unit (same units as PeTar's internal time).
+    bool loadFromFile(const std::string &filename, double TSTAR) {
+        snapshots.clear();
+        FILE *fp = std::fopen(filename.c_str(), "r");
         if (!fp) {
-            fprintf(stderr, "Error: Cannot open tidal tensor file %s\n", filename.c_str());
-            exit(1);
+            std::cerr << "[TT] ERROR: cannot open '" << filename << "'\n";
+            return false;
         }
 
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            // Skip comments and blank lines
-            if (line[0] == '#' || std::isspace(line[0])) continue;
+        // Read header: NBTT TTUNIT TTOFFSET
+        int NBTT = 0;
+        double TTUNIT = 0.0, TTOFFSET = 0.0;
+        if (std::fscanf(fp, "%d %lf %lf", &NBTT, &TTUNIT, &TTOFFSET) != 3) {
+            std::cerr << "[TT] ERROR: failed to read header (NBTT TTUNIT TTOFFSET)\n";
+            std::fclose(fp);
+            return false;
+        }
 
-            double t, Txx, Txy, Txz, Tyy, Tyz, Tzz;
-            if (sscanf(line, "%lf %lf %lf %lf %lf %lf %lf",
-                       &t, &Txx, &Txy, &Txz, &Tyy, &Tyz, &Tzz) == 7) {
-                TensorSnapshot snap;
-                snap.time = t; // convert to PeTar units
-                snap.T[0][0] = Txx; snap.T[0][1] = Txy; snap.T[0][2] = Txz;
-                snap.T[1][0] = Txy; snap.T[1][1] = Tyy; snap.T[1][2] = Tyz;
-                snap.T[2][0] = Txz; snap.T[2][1] = Tyz; snap.T[2][2] = Tzz;
-                snapshots.push_back(snap);
+        if (NBTT <= 0) {
+            std::cerr << "[TT] ERROR: NBTT <= 0 in tt.dat\n";
+            std::fclose(fp);
+            return false;
+        }
+
+        // pre-reserve
+        snapshots.reserve(std::max(1, NBTT));
+
+        for (int k=0; k<NBTT; ++k) {
+            // We'll attempt to read a line with either 10 columns (time + 9) or 7 columns (time + 6 symmetric)
+            // read as a whole line and parse with sscanf to be robust against different whitespace
+            char linebuf[1024];
+            if (!std::fgets(linebuf, sizeof(linebuf), fp)) break; // EOF or error
+
+            // skip empty or comment lines
+            char *ptr = linebuf;
+            while(*ptr && isspace(*ptr)) ++ptr;
+            if (*ptr == '\0' || *ptr == '#') { --k; continue; } // ignore and retry same k
+
+            double t;
+            double vals[9];
+            int nread = std::sscanf(linebuf,
+                                    "%lf %lf %lf %lf %lf %lf %lf %lf %lf %lf",
+                                    &t,
+                                    &vals[0], &vals[1], &vals[2],
+                                    &vals[3], &vals[4], &vals[5],
+                                    &vals[6], &vals[7], &vals[8]);
+
+            if (nread == 10) {
+                TensorSnapshot s;
+                // scale time: TTTIME = t * (TTUNIT/TSTAR) + TTOFFSET/TSTAR  (NBODY6 logic)
+                s.time = t * (TTUNIT / TSTAR) + (TTOFFSET / TSTAR);
+                // scale tensor: TTENS *= (TSTAR / TTUNIT)^2
+                double fac = (TSTAR / TTUNIT) * (TSTAR / TTUNIT);
+                s.T[0][0] = vals[0] * fac; s.T[0][1] = vals[1] * fac; s.T[0][2] = vals[2] * fac;
+                s.T[1][0] = vals[3] * fac; s.T[1][1] = vals[4] * fac; s.T[1][2] = vals[5] * fac;
+                s.T[2][0] = vals[6] * fac; s.T[2][1] = vals[7] * fac; s.T[2][2] = vals[8] * fac;
+                snapshots.push_back(s);
+            } else {
+                // try 7-value symmetric format: time Txx Txy Txz Tyy Tyz Tzz
+                double t2, a,b,c,d,e,f;
+                int n7 = std::sscanf(linebuf, "%lf %lf %lf %lf %lf %lf %lf", &t2, &a,&b,&c,&d,&e,&f);
+                if (n7==7) {
+                    TensorSnapshot s;
+                    s.time = t2 * (TTUNIT / TSTAR) + (TTOFFSET / TSTAR);
+                    double fac = (TSTAR / TTUNIT) * (TSTAR / TTUNIT);
+                    // interpret as: t, Txx, Txy, Txz, Tyy, Tyz, Tzz (common symmetric 6 values)
+                    s.T[0][0] = a * fac; s.T[0][1] = b * fac; s.T[0][2] = c * fac;
+                    s.T[1][0] = b * fac; s.T[1][1] = d * fac; s.T[1][2] = e * fac;
+                    s.T[2][0] = c * fac; s.T[2][1] = e * fac; s.T[2][2] = f * fac;
+                    snapshots.push_back(s);
+                } else {
+                    std::cerr << "[TT] WARNING: unrecognized line format in tt.dat, skipping line:\n  '"
+                              << linebuf << "'\n";
+                    --k; // don't count this line
+                    continue;
+                }
             }
         }
-        fclose(fp);
+
+        std::fclose(fp);
 
         if (snapshots.empty()) {
-            fprintf(stderr, "Error: tidal tensor file is empty!\n");
-            exit(1);
+            std::cerr << "[TT] ERROR: no valid tensor snapshots loaded\n";
+            return false;
         }
 
-        fprintf(stdout, "[TidalTensorManager] Loaded %zu snapshots from %s\n",
-                snapshots.size(), filename.c_str());
+        std::sort(snapshots.begin(), snapshots.end(), [](const TensorSnapshot &a, const TensorSnapshot &b){ return a.time < b.time; });
+
+        // initialise interp to first snapshot
+        interp = snapshots.front();
+        last_query_time = interp.time;
+        loaded = true;
+
+        std::cerr << "[TT] Loaded " << snapshots.size() << " snapshots; time range: "
+                  << snapshots.front().time << " -> " << snapshots.back().time << " (PeTar time units)\n";
+        return true;
     }
 
-    void update(double sim_time) {
-        current_time = sim_time;
+    // Set the reference point r0(t). Default is origin.
+    void setReference(const PS::F64vec &r0) {
+        ref_point = r0;
     }
 
-    PS::F64vec applyTensor(const PS::F64vec &pos) const {
-        if (snapshots.empty()) return PS::F64vec(0.0);
+    // Update internal interpolated tensor for the requested time.
+    // This does linear interpolation and clamps outside the range.
+    void update(double time) {
+        if (!loaded) return;
+        // quick path: same time
+        if (time == last_query_time) return;
 
-        // If before first snapshot
-        if (current_time <= snapshots.front().time)
-            return multiplyTensor(snapshots.front(), pos);
+        // before first
+        if (time <= snapshots.front().time) {
+            interp = snapshots.front(); interp.time = time; last_query_time = time; return;
+        }
+        // after last
+        if (time >= snapshots.back().time) {
+            interp = snapshots.back(); interp.time = time; last_query_time = time; return;
+        }
 
-        // If after last snapshot
-        if (current_time >= snapshots.back().time)
-            return multiplyTensor(snapshots.back(), pos);
+        // find interval
+        auto it = std::upper_bound(snapshots.begin(), snapshots.end(), time,
+                                   [](double t, const TensorSnapshot &s){ return t < s.time; });
+        // it points to first snapshot with time > t, so prev is <= t
+        auto it_hi = it;
+        auto it_lo = it - 1;
+        double t_lo = it_lo->time;
+        double t_hi = it_hi->time;
+        double alpha = (time - t_lo) / (t_hi - t_lo);
 
-        // Find surrounding snapshots
-        for (size_t i = 0; i < snapshots.size() - 1; ++i) {
-            if (current_time >= snapshots[i].time &&
-                current_time <= snapshots[i+1].time) {
-
-                const TensorSnapshot &s1 = snapshots[i];
-                const TensorSnapshot &s2 = snapshots[i+1];
-
-                double dt = s2.time - s1.time;
-                double alpha = (current_time - s1.time) / dt;
-
-                // Interpolate each tensor component
-                TensorSnapshot interp;
-                for (int r = 0; r < 3; r++) {
-                    for (int c = 0; c < 3; c++) {
-                        interp.T[r][c] = (1.0 - alpha) * s1.T[r][c] + alpha * s2.T[r][c];
-                    }
-                }
-
-                return multiplyTensor(interp, pos);
+        interp.time = time;
+        for (int i=0;i<3;i++){
+            for (int j=0;j<3;j++){
+                interp.T[i][j] = (1.0 - alpha) * it_lo->T[i][j] + alpha * it_hi->T[i][j];
             }
         }
-
-        // Should not reach here
-        return PS::F64vec(0.0);
+        last_query_time = time;
     }
 
-private:
-    PS::F64vec multiplyTensor(const TensorSnapshot &snap, const PS::F64vec &pos) const {
-        double ax = snap.T[0][0]*pos.x + snap.T[0][1]*pos.y + snap.T[0][2]*pos.z;
-        double ay = snap.T[1][0]*pos.x + snap.T[1][1]*pos.y + snap.T[1][2]*pos.z;
-        double az = snap.T[2][0]*pos.x + snap.T[2][1]*pos.y + snap.T[2][2]*pos.z;
-        return PS::F64vec(ax, ay, az);
+    // Apply interpolated tensor to a position (pos - ref_point)
+    PS::F64vec applyTensor(const PS::F64vec &pos) const {
+        PS::F64vec rel = pos - ref_point;
+        PS::F64vec a;
+        a.x = interp.T[0][0]*rel.x + interp.T[0][1]*rel.y + interp.T[0][2]*rel.z;
+        a.y = interp.T[1][0]*rel.x + interp.T[1][1]*rel.y + interp.T[1][2]*rel.z;
+        a.z = interp.T[2][0]*rel.x + interp.T[2][1]*rel.y + interp.T[2][2]*rel.z;
+        return a;
     }
+
+    // Convenience: multiply an arbitrary tensor by a vector
+    static PS::F64vec multiplyTensor(const double Tmat[3][3], const PS::F64vec &v) {
+        PS::F64vec r;
+        r.x = Tmat[0][0]*v.x + Tmat[0][1]*v.y + Tmat[0][2]*v.z;
+        r.y = Tmat[1][0]*v.x + Tmat[1][1]*v.y + Tmat[1][2]*v.z;
+        r.z = Tmat[2][0]*v.x + Tmat[2][1]*v.y + Tmat[2][2]*v.z;
+        return r;
+    }
+
+    // Utility: get time range
+    bool getTimeRange(double &tmin, double &tmax) const {
+        if (!loaded) return false;
+        tmin = snapshots.front().time; tmax = snapshots.back().time; return true;
+    }
+
+    // number of snapshots
+    size_t size() const { return snapshots.size(); }
 };
 
