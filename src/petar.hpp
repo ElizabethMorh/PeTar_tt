@@ -1048,13 +1048,10 @@ void externalForce() {
     // Extending the external force calculation
     // Switch between tidal tensor and GALPY
     if (input_parameters.external_force_mode.value == "tidal_tensor") {
-        tidal_tensor_mgr.update(stat.time); 
-
-        // Apply the tensor acceleration to all local particles
-        for (PS::S32 i = 0; i < system_soft.getNumberOfParticleLocal(); i++) {
-            auto &p = system_soft[i];
-            PS::F64vec acc_tt = tidal_tensor_mgr.applyTensor(p.pos);
-            p.acc += acc_tt;
+        tidal_tensor_mgr.update(current_time);        // current_time in PeTar time units
+        tidal_tensor_mgr.setReference(cluster_com);   // set to COM or the orbit reference point
+        for (each local particle p) {
+            p.acc += tidal_tensor_mgr.applyTensor(p.pos);
         }
     }
 
@@ -3078,7 +3075,7 @@ void externalForce() {
         
         // Loading the tt.dat
         std::string tt_filename = input_parameters.fname_tt;
-        tidal_tensor_mgr.loadFromFile(tt_filename);
+        tidal_tensor_mgr.loadFromFile(tt_filename, TSTAR); // if internal time unit is Myr, TSTAR = 1.0
 
         // units
         if (input_parameters.unit_set.value==1) {
