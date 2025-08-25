@@ -1053,8 +1053,7 @@ void externalForce() {
             ext_tt_mgr.update(stat.time);
 
             // 2) choose the reference point r0(t)
-            PS::F64vec r0(0.0,0.0,0.0);
-            ext_tt_mgr.setReference(r0);
+            ext_tt_mgr.setReference(stat.pcm.pos);
 
             // 3) apply a_ext = T(t) · (r - r0) to local particles
             for (PS::S32 i=0; i<sys.n_ptcl_loc; i++) {
