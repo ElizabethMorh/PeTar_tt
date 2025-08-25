@@ -265,6 +265,9 @@ public:
             {adjust_group_write_option.key,   required_argument, &petar_flag, 24},
 #endif            
             {nstep_dt_soft_kepler.key,  required_argument, &petar_flag, 25},
+            {tt_parameters.fname_tt.key, required_argument, &petar_flag, 26},
+            {tt_parameters.rscale.key,   required_argument, &petar_flag, 27},
+            {tt_parameters.vscale.key,   required_argument, &petar_flag, 28},
             {"help",                  no_argument, 0, 'h'},        
             {0,0,0,0}
         };
@@ -645,7 +648,6 @@ public:
     
     // Tidal tensor manager
     ExternalTensorManager ext_tt_mgr;      // wraps TidalTensorManager
-    IOParamsExternalTensor &tt_io;         // alias to IO inside input_parameters
 
 #ifdef PROFILE
     PS::S32 dn_loop;
@@ -3083,9 +3085,9 @@ void externalForce() {
         
         // Initialize tidal-tensor subsystem (if chosen)
         if (input_parameters.external_force_mode.value == "tidal_tensor") {
-            // ext_tt_mgr reads tt_io (file, rscale, vscale)
-            bool ok = ext_tt_mgr.initial(tt_io, input_parameters.print_flag);
-            hard_assert(ok);
+            bool ok = ext_tt_mgr.initial(input_parameters.tt_parameters, input_parameters.print_flag);
+            assert(ok);
+        }
 
         // units
         if (input_parameters.unit_set.value==1) {
