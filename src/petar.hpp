@@ -62,7 +62,7 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #include"hard_assert.hpp"
 #include"soft_ptcl.hpp"
 #include"soft_force.hpp"
-#include "external_tensor_force.hpp" // Including the tensor manager here
+#include "external_tensor_force.hpp"
 #ifdef USE_GPU
 #include"force_gpu_cuda.hpp"
 #endif
@@ -97,8 +97,9 @@ public:
     IOParams<PS::S64> n_group_limit;
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
-    IOParams<std::string> fname_tt;   // filename for tidal tensor data
-    IOParams<std::string> external_force_mode; // "none", "galpy", "tidal_tensor"
+    IOParams<std::string> external_force_mode; // shared key for selecting the external mode
+    std::vector<void*> input_par_store;        // pass to IO helpers
+    IOParamsExternalTensor tt_parameters;      // <-- new
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
 #endif
@@ -214,8 +215,8 @@ public:
                      append_switcher(input_par_store, 1, "a", "Data output style: 0 - create new output files and overwrite existing ones except snapshots; 1 - append new data to existing files"),
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
-                     fname_tt(input_par_store, "tt.dat", "tidal-tensor-file", "Filename for tidal tensor data"),
                      external_force_mode(input_par_store, "none", "external-force-mode", "Type of external force: none, galpy, tidal_tensor"),
+                     tt_parameters(input_par_store),  // constructs tt IO params (file, rscale, vscale)
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
                      print_flag(false), update_changeover_flag(false), update_rsearch_flag(false) {}
 
@@ -264,7 +265,6 @@ public:
             {adjust_group_write_option.key,   required_argument, &petar_flag, 24},
 #endif            
             {nstep_dt_soft_kepler.key,  required_argument, &petar_flag, 25},
-            {fname_tt.key,              required_argument, &petar_flag, 26},
             {"help",                  no_argument, 0, 'h'},        
             {0,0,0,0}
         };
@@ -642,8 +642,10 @@ public:
 #ifdef GALPY
     IOParamsGalpy galpy_parameters;
 #endif
-
-TidalTensorManager tidal_tensor_mgr; // <--- new for the tt manager
+    
+    // Tidal tensor manager
+    ExternalTensorManager ext_tt_mgr;      // wraps TidalTensorManager
+    IOParamsExternalTensor &tt_io;         // alias to IO inside input_parameters
 
 #ifdef PROFILE
     PS::S32 dn_loop;
@@ -1045,20 +1047,21 @@ void externalForce() {
     profile.other.start();
 #endif
 
-    // Extending the external force calculation
-    // Switch between tidal tensor and GALPY
-    if (input_parameters.external_force_mode.value == "tidal_tensor") {
-        tidal_tensor_mgr.update(stat.time);
+        if (input_parameters.external_force_mode.value == "tidal_tensor") {
+            // 1) bring tensor to current time
+            ext_tt_mgr.update(stat.time);
 
-        PS::F64vec acc;
-        PS::F64 pot;
-        // evaluate center of mass acceleration
-        PS::F64vec pos_zero=PS::F64vec(0.0);
-        tidal_tensor_mgr.setReference(&pos_zero[0]);   // set to COM or the orbit reference point
-        for (each local particle p) {
-            p.acc += tidal_tensor_mgr.applyTensor(p.pos);
+            // 2) choose the reference point r0(t)
+            PS::F64vec r0(0.0,0.0,0.0);
+            ext_tt_mgr.setReference(r0);
+
+            // 3) apply a_ext = T(t) · (r - r0) to local particles
+            for (PS::S32 i=0; i<n_ptcl_loc; ++i) {
+                // assumes ptcl[i].pos is PS::F64vec and ptcl[i].acc is PS::F64vec
+                PS::F64vec aext = ext_tt_mgr.accel(ptcl[i].pos);
+                ptcl[i].acc += aext;
+            }
         }
-    }
 
 #ifdef GALPY
         // external force and potential
@@ -3078,10 +3081,11 @@ void externalForce() {
         int write_style = input_parameters.write_style.value;
         std::cout<<std::setprecision(WRITE_PRECISION);
         
-        // Loading the tt.dat
-        std::string tt_filename = input_parameters.fname_tt.getValue();
-        double TSTAR = Unit::grav_const;  // G in chosen units
-        tidal_tensor_mgr.loadFromFile(tt_filename, TSTAR);
+        // Initialize tidal-tensor subsystem (if chosen)
+        if (input_parameters.external_force_mode.value == "tidal_tensor") {
+            // ext_tt_mgr reads tt_io (file, rscale, vscale)
+            bool ok = ext_tt_mgr.initial(tt_io, input_parameters.print_flag);
+            hard_assert(ok);
 
         // units
         if (input_parameters.unit_set.value==1) {
