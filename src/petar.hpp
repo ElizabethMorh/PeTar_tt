@@ -98,7 +98,6 @@ public:
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
     IOParams<std::string> external_force_mode; // shared key for selecting the external mode
-    std::vector<void*> input_par_store;        // pass to IO helpers
     IOParamsExternalTensor tt_parameters;      // <-- new
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
@@ -1058,10 +1057,9 @@ void externalForce() {
             ext_tt_mgr.setReference(r0);
 
             // 3) apply a_ext = T(t) · (r - r0) to local particles
-            for (PS::S32 i=0; i<n_ptcl_loc; ++i) {
-                // assumes ptcl[i].pos is PS::F64vec and ptcl[i].acc is PS::F64vec
-                PS::F64vec aext = ext_tt_mgr.accel(ptcl[i].pos);
-                ptcl[i].acc += aext;
+            for (PS::S32 i=0; i<sys.n_ptcl_loc; i++) {
+                PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
+                sys[i].acc += aext;
             }
         }
 
