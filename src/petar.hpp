@@ -97,8 +97,11 @@ public:
     IOParams<PS::S64> n_group_limit;
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
-    IOParams<std::string> external_force_mode; // shared key for selecting the external mode
-    IOParamsExternalTensor tt_parameters;      // <-- new
+    IOParams<std::string> external_force_mode;  // Shared key for selecting external mode
+    IOParamsExternalTensor tt_parameters;      // Tidal tensor parameters
+#ifdef EXTERNAL_TENSOR_FORCE
+    ExternalTensorManager ext_tt_mgr;      // Tidal tensor manager
+#endif
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
 #endif
@@ -1050,17 +1053,23 @@ void externalForce() {
     profile.other.start();
 #endif
 
-// Apply external forces
-if (external_force_mode.value == "tt") {
-    // 1) Bring tensor to current time
-    ext_tt_mgr.update(stat.time);
-    // 2) Choose the reference point r0(t)
-    ext_tt_mgr.setReference(stat.pcm.pos);
-    // 3) Apply a_ext = T(t) · (r - r0) to local particles
-    for (PS::S32 i = 0; i < sys.n_ptcl_loc; i++) {
-        PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
-        sys[i].acc += aext;
+    if (external_force_mode.value == "tt") {
+        // 1) Bring tensor to current time
+        ext_tt_mgr.update(stat.time);
+
+        // 2) Choose the reference point r0(t)
+        ext_tt_mgr.setReference(stat.pcm.pos);
+
+        // 3) Apply a_ext = T(t) · (r - r0) to local particles
+        for (PS::S32 i = 0; i < sys.n_ptcl_loc; i++) {
+            PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
+            sys[i].acc += aext;
+        }
     }
+
+#ifdef PROFILE
+    profile.other.end();
+#endif
 }
 
 #ifdef GALPY
