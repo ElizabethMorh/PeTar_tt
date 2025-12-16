@@ -211,6 +211,10 @@ public:
 
     void setReference(const PS::F64vec &r0) { tt_.setReference(r0); }
     void update(double t_now)               { tt_.update(t_now);    }
-    PS::F64vec accel(const PS::F64vec &pos) const { PS::F64vec a = tt_.applyTensor(pos); return PS::F64vec(-a.x, -a.y, -a.z);}
+    PS::F64vec accel(const PS::F64vec &pos) const {
+    PS::F64vec a = tt_.applyTensor(pos);
+    std::cerr << "[TT] Position: " << pos.x << " " << pos.y << " " << pos.z 
+              << " -> Acceleration: " << -a.x << " " << -a.y << " " << -a.z << "\n";
+    return PS::F64vec(-a.x, -a.y, -a.z);}
     bool isLoaded() const { return tt_.isLoaded(); }
 };

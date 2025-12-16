@@ -214,7 +214,7 @@ public:
                      append_switcher(input_par_store, 1, "a", "Data output style: 0 - create new output files and overwrite existing ones except snapshots; 1 - append new data to existing files"),
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
-                     external_force_mode(input_par_store, "none", "external-force-mode", "Type of external force: none, galpy, tidal_tensor"),
+                     external_force_mode(input_par_store, "none", "external-force-mode", "Type of external force: none, galpy, tt"),
                      tt_parameters(input_par_store),  // constructs tt IO params (file, rscale, vscale)
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
                      print_flag(false), update_changeover_flag(false), update_rsearch_flag(false) {}
@@ -645,8 +645,10 @@ public:
     IOParamsGalpy galpy_parameters;
 #endif
     
-    // Tidal tensor manager
-    ExternalTensorManager ext_tt_mgr;      // wraps TidalTensorManager
+// Add this with other member variables
+#ifdef EXTERNAL_TENSOR_FORCE
+    ExternalTensorManager ext_tt_mgr;  // Tidal tensor manager
+#endif
 
 #ifdef PROFILE
     PS::S32 dn_loop;
@@ -1048,19 +1050,18 @@ void externalForce() {
     profile.other.start();
 #endif
 
-        if (input_parameters.external_force_mode.value == "tidal_tensor") {
-            // 1) bring tensor to current time
-            ext_tt_mgr.update(stat.time);
-
-            // 2) choose the reference point r0(t)
-            ext_tt_mgr.setReference(stat.pcm.pos);
-
-            // 3) apply a_ext = T(t) · (r - r0) to local particles
-            for (PS::S32 i=0; i<sys.n_ptcl_loc; i++) {
-                PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
-                sys[i].acc += aext;
-            }
-        }
+// Apply external forces
+if (external_force_mode.value == "tt") {
+    // 1) Bring tensor to current time
+    ext_tt_mgr.update(stat.time);
+    // 2) Choose the reference point r0(t)
+    ext_tt_mgr.setReference(stat.pcm.pos);
+    // 3) Apply a_ext = T(t) · (r - r0) to local particles
+    for (PS::S32 i = 0; i < sys.n_ptcl_loc; i++) {
+        PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
+        sys[i].acc += aext;
+    }
+}
 
 #ifdef GALPY
         // external force and potential
@@ -3080,10 +3081,13 @@ void externalForce() {
         int write_style = input_parameters.write_style.value;
         std::cout<<std::setprecision(WRITE_PRECISION);
         
-        // Initialize tidal-tensor subsystem (if chosen)
-        if (input_parameters.external_force_mode.value == "tidal_tensor") {
-            bool ok = ext_tt_mgr.initial(input_parameters.tt_parameters, input_parameters.print_flag);
-            assert(ok);
+        // Initialize tidal tensor if enabled
+        if (external_force_mode.value == "tt") {
+            bool ok = ext_tt_mgr.initial(tt_parameters, input_parameters.print_flag);
+            if (!ok) {
+                std::cerr << "Error: Failed to initialize tidal tensor\n";
+                std::exit(1);
+            }
         }
 
         // units
