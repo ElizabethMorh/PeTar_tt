@@ -706,6 +706,15 @@ public:
     SystemHard system_hard_connected;
 #endif
     int n_interrupt_glb;
+    
+    // External force
+    PS::F64 time_kick;
+    PS::S64 n_loop;
+    
+    // Tidal tensor manager
+#ifdef EXTERNAL_TENSOR_FORCE
+    ExternalTensorManager ext_tt_mgr;
+#endif
 
     // mass change particle list
     PS::ReallocatableArray<PS::S32> mass_modify_list;
@@ -739,6 +748,9 @@ public:
 #endif
 #ifdef GALPY
         galpy_parameters(),
+#endif
+#ifdef EXTERNAL_TENSOR_FORCE
+        ext_tt_mgr(),
 #endif
 #ifdef PROFILE
         // profile
@@ -1042,35 +1054,32 @@ public:
 #endif
 #ifdef PROFILE
         profile.force_correct.barrier();
-        PS::Comm::barrier();
         profile.force_correct.end();
 #endif
     }
 
-//! calculate external force
-void externalForce() {
+    //! calculate external force
+    void externalForce() {
 #ifdef PROFILE
-    profile.other.start();
+        profile.other.start();
 #endif
 
-    if (external_force_mode.value == "tt") {
-        // 1) Bring tensor to current time
-        ext_tt_mgr.update(stat.time);
-
-        // 2) Choose the reference point r0(t)
-        ext_tt_mgr.setReference(stat.pcm.pos);
-
-        // 3) Apply a_ext = T(t) · (r - r0) to local particles
-        for (PS::S32 i = 0; i < sys.n_ptcl_loc; i++) {
-            PS::F64vec aext = ext_tt_mgr.accel(sys[i].pos);
-            sys[i].acc += aext;
+        if (input_parameters.external_force_mode.value == "tt") {
+            // 1) Bring tensor to current time
+            ext_tt_mgr.update(stat.time);
+            // 2) Choose the reference point r0(t)
+            ext_tt_mgr.setReference(stat.pcm.pos);
+            // 3) Apply a_ext = T(t) · (r - r0) to local particles
+            for (PS::S32 i = 0; i < system_soft.getNumberOfParticleLocal(); i++) {
+                PS::F64vec aext = ext_tt_mgr.accel(system_soft[i].pos);
+                system_soft[i].acc += aext;
+            }
         }
-    }
 
 #ifdef PROFILE
-    profile.other.end();
+        profile.other.end();
 #endif
-}
+    }
 
 #ifdef GALPY
         // external force and potential
