@@ -647,11 +647,6 @@ public:
 #ifdef GALPY
     IOParamsGalpy galpy_parameters;
 #endif
-    
-// Add this with other member variables
-#ifdef EXTERNAL_TENSOR_FORCE
-    ExternalTensorManager ext_tt_mgr;  // Tidal tensor manager
-#endif
 
 #ifdef PROFILE
     PS::S32 dn_loop;
@@ -707,15 +702,6 @@ public:
 #endif
     int n_interrupt_glb;
     
-    // External force
-    PS::F64 time_kick;
-    PS::S64 n_loop;
-    
-    // Tidal tensor manager
-#ifdef EXTERNAL_TENSOR_FORCE
-    ExternalTensorManager ext_tt_mgr;
-#endif
-
     // mass change particle list
     PS::ReallocatableArray<PS::S32> mass_modify_list;
 
