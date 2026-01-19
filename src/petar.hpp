@@ -98,10 +98,6 @@ public:
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
     IOParams<std::string> external_force_mode;  // Shared key for selecting external mode
-    IOParamsExternalTensor tt_parameters;      // Tidal tensor parameters
-#ifdef EXTERNAL_TENSOR_FORCE
-    ExternalTensorManager ext_tt_mgr;      // Tidal tensor manager
-#endif
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
 #endif
@@ -647,7 +643,9 @@ public:
 #ifdef GALPY
     IOParamsGalpy galpy_parameters;
 #endif
-
+#ifdef EXTERNAL_TENSOR_FORCE
+    IOParamsExternalTensor tt_parameters;
+#endif
 #ifdef PROFILE
     PS::S32 dn_loop;
     SysProfile profile;
@@ -691,6 +689,9 @@ public:
 
 #ifdef GALPY
     GalpyManager galpy_manager;
+#endif
+#ifdef EXTERNAL_TENSOR_FORCE
+    ExternalTensorManager tt_manager;      // Tidal tensor manager
 #endif
 
     // hard integrator
@@ -736,7 +737,7 @@ public:
         galpy_parameters(),
 #endif
 #ifdef EXTERNAL_TENSOR_FORCE
-        ext_tt_mgr(),
+        tt_parameters(),
 #endif
 #ifdef PROFILE
         // profile
@@ -750,6 +751,9 @@ public:
         tree_nb(), tree_soft(), 
 #ifdef GALPY
         galpy_manager(),
+#endif
+#ifdef EXTERNAL_TENSOR_FORCE
+        tt_manager(),
 #endif
         hard_manager(), system_hard_one_cluster(), system_hard_isolated(), 
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
@@ -1086,7 +1090,7 @@ public:
 #else
             PS::F64vec pos_center=pi.pos - stat.pcm.pos;
             galpy_manager.calcAccPot(acc, pot, stat.time, input_parameters.gravitational_constant.value*pi.mass, &pi.pos[0], &pos_center[0]);
-#endif
+#endif //Potential apply 
             assert(!std::isinf(acc[0]));
             assert(!std::isnan(acc[0]));
             assert(!std::isinf(pot));
@@ -1101,6 +1105,27 @@ public:
 #endif
         }
 #endif //GALPY
+
+#ifdef EXTERNAL_TENSOR_FORCE
+        // Update tensor to current time
+        tt_manager.update(stat.time, true);
+        
+        // Set reference point (e.g., cluster center)
+        tt_manager.setReference(stat.pcm.pos);
+        
+        // Apply tensor force to all particles
+        PS::S64 n_loc_all = system_soft.getNumberOfParticleLocal();
+        #pragma omp parallel for
+        for (int i = 0; i < n_loc_all; i++) {
+            auto& pi = system_soft[i];
+            PS::F64vec aext = tt_manager.accel(pi.pos);
+            
+            // Add acceleration to particle
+            pi.acc[0] += aext[0];
+            pi.acc[1] += aext[1];
+            pi.acc[2] += aext[2];
+        }
+#endif
         
 #ifdef PROFILE
         profile.other.barrier();
@@ -1121,7 +1146,16 @@ public:
         // set zero mass to avoid duplicate anti force to potential set
         galpy_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
         dv = acc*_dt;
-#endif        
+#endif        //Theres two postions, CM-global and relative position to cm for each star 
+#ifdef EXTERNAL_TENSOR_FORCE
+        PS::F64vec acc;
+        PS::F64 pot;
+        // evaluate center of mass acceleration
+        PS::F64vec pos_zero=PS::F64vec(0.0);
+        // set zero mass to avoid duplicate anti force to potential set
+        tt_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
+        dv = acc*_dt;
+#endif 
 
         stat.pcm.vel += dv;
         for (int i=0; i<stat.n_all_loc; i++) system_soft[i].vel -= dv;
@@ -1394,7 +1428,7 @@ public:
 
 #ifdef GALPY
         galpy_manager.kickMovePot(_dt_kick);
-#endif
+#endif //No need this
 
 #ifdef RECORD_CM_IN_HEADER
         // correct Ptcl:vel_cm
@@ -1538,7 +1572,7 @@ public:
 
 #ifdef GALPY
         galpy_manager.driftMovePot(_dt_drift);
-#endif
+#endif //No need this
         
         if (n_interrupt_glb==0) Ptcl::group_data_mode = GroupDataMode::cm;
         
@@ -1946,7 +1980,11 @@ public:
 #ifdef GALPY
                 // for External potential
                 galpy_manager.writePotentialPars(fname+".galpy", stat.time);
-#endif
+#endif 
+#ifdef EXTERNAL_TENSOR_FORCE
+                // for External potential
+                tt_manager.writePotentialPars(fname+".tt", stat.time);
+#endif //Backup to restart the simulation
             }
         }
         // write all information in to fstatus
@@ -2527,6 +2565,10 @@ public:
         fout<<"Use external potential: Galpy\n";
 #endif 
 
+#ifdef EXTERNAL_TENSOR_FORCE
+        fout<<"Use external potential: tt\n";
+#endif 
+
 #ifdef KDKDK_2ND
         fout<<"Use 2nd-order KDKDK mode for tree step\n";
 #endif
@@ -2634,7 +2676,12 @@ public:
         if (my_rank==0) galpy_parameters.print_flag=true;
         else galpy_parameters.print_flag=false;
         galpy_parameters.read(argc,argv);
-#endif
+#endif //Do similar
+#ifdef EXTERNAL_TENSOR_FORCE
+        if (my_rank==0) tt_parameters.print_flag=true;
+        else tt_parameters.print_flag=false;
+        tt_parameters.read(argc,argv);
+#endif //Do similar
 
         // help case, return directly
         if (read_flag==-1) {
@@ -3383,6 +3430,10 @@ public:
         std::string galpy_conf_filename = input_parameters.fname_inp.value+".galpy";
         galpy_manager.initial(galpy_parameters, stat.time, galpy_conf_filename, restart_flag, print_flag);
 #endif
+#ifdef EXTERNAL_TENSOR_FORCE
+        std::string tt_conf_filename = input_parameters.fname_inp.value+".tt";
+        tt_manager.initial(tt_parameters, stat.time, tt_conf_filename, restart_flag, print_flag);
+#endif
     
         // set system hard paramters
         hard_manager.setDtRange(input_parameters.dt_soft.value/input_parameters.dt_limit_hard_factor.value, input_parameters.dt_min_hermite_index.value);
@@ -4089,3 +4140,4 @@ public:
 };
 
 bool PeTar::initial_fdps_flag = false;
+
