@@ -62,7 +62,6 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #include"hard_assert.hpp"
 #include"soft_ptcl.hpp"
 #include"soft_force.hpp"
-#include "external_tensor_force.hpp"
 #ifdef USE_GPU
 #include"force_gpu_cuda.hpp"
 #endif
@@ -85,6 +84,9 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #ifdef GALPY
 #include"galpy_interface.h"
 #endif
+#ifdef TT
+#include"external_tensor_force.hpp"
+#endif
 
 //! IO parameters for Petar
 class IOParamsPeTar{
@@ -97,7 +99,6 @@ public:
     IOParams<PS::S64> n_group_limit;
     IOParams<PS::S64> n_interrupt_limit;
     IOParams<PS::S64> n_smp_ave;
-    IOParams<std::string> external_force_mode;  // Shared key for selecting external mode
 #ifdef ORBIT_SAMPLING
     IOParams<PS::S64> n_split;
 #endif
@@ -192,7 +193,7 @@ public:
                      r_bin        (input_par_store, 0.0,  "r-bin", "Tidal tensor box size and the radial criterion for detecting multiple systems (binaries, triples, etc.), if value is zero, use 0.8*r_in"),
 //                     r_search_max (input_par_store, 0.0,  "Maximum search radius criterion", "5*r_out"),
                      r_search_min (input_par_store, 0.0,  "r-search-min", "Minimum neighbor search radius for hard clusters","auto"),
-                     r_escape     (input_par_store, PS::LARGE_FLOAT,  "r-escape", "Escape radius criterion, 0: no escaper removal; <0: remove particles when r>-r_escape; >0: remove particles when r>r_escape and energy>0"),
+                     r_escape     (input_par_store, PS::LARGE_FLOAT,  "r-escape", "Escape radius criterion, <0: remove particles when r>-r_escape; >=0: remove particles when r>r_escape and energy>0"),
                      sd_factor    (input_par_store, 1e-4, "slowdown-factor", "Slowdown perturbation criterion"),
                      data_format  (input_par_store, 1,    "i", "Data read(r)/write(w) format BINARY(B)/ASCII(A): r-B/w-A (3), r-A/w-B (2), rw-A (1), rw-B (0)"),
                      write_style  (input_par_store, 1,    "w", "File writing style: 0, no output; 1. write snapshots, status, and profile separately; 2. write snapshot and status in one line per step (no MPI support); 3. write only status and profile"),
@@ -213,8 +214,6 @@ public:
                      append_switcher(input_par_store, 1, "a", "Data output style: 0 - create new output files and overwrite existing ones except snapshots; 1 - append new data to existing files"),
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
-                     external_force_mode(input_par_store, "none", "external-force-mode", "Type of external force: none, galpy, tt"),
-                     tt_parameters(input_par_store),  // constructs tt IO params (file, rscale, vscale)
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
                      print_flag(false), update_changeover_flag(false), update_rsearch_flag(false) {}
 
@@ -263,9 +262,6 @@ public:
             {adjust_group_write_option.key,   required_argument, &petar_flag, 24},
 #endif            
             {nstep_dt_soft_kepler.key,  required_argument, &petar_flag, 25},
-            {tt_parameters.fname_tt.key, required_argument, &petar_flag, 26},
-            {tt_parameters.rscale.key,   required_argument, &petar_flag, 27},
-            {tt_parameters.vscale.key,   required_argument, &petar_flag, 28},
             {"help",                  no_argument, 0, 'h'},        
             {0,0,0,0}
         };
@@ -643,9 +639,10 @@ public:
 #ifdef GALPY
     IOParamsGalpy galpy_parameters;
 #endif
-#ifdef EXTERNAL_TENSOR_FORCE
-    IOParamsExternalTensor tt_parameters;
+#ifdef TT
+    IOParamsTT tt_parameters;
 #endif
+
 #ifdef PROFILE
     PS::S32 dn_loop;
     SysProfile profile;
@@ -690,8 +687,8 @@ public:
 #ifdef GALPY
     GalpyManager galpy_manager;
 #endif
-#ifdef EXTERNAL_TENSOR_FORCE
-    ExternalTensorManager tt_manager;      // Tidal tensor manager
+#ifdef TT
+    TTManager tt_manager;
 #endif
 
     // hard integrator
@@ -702,7 +699,7 @@ public:
     SystemHard system_hard_connected;
 #endif
     int n_interrupt_glb;
-    
+
     // mass change particle list
     PS::ReallocatableArray<PS::S32> mass_modify_list;
 
@@ -736,7 +733,7 @@ public:
 #ifdef GALPY
         galpy_parameters(),
 #endif
-#ifdef EXTERNAL_TENSOR_FORCE
+#ifdef TT
         tt_parameters(),
 #endif
 #ifdef PROFILE
@@ -752,10 +749,10 @@ public:
 #ifdef GALPY
         galpy_manager(),
 #endif
-#ifdef EXTERNAL_TENSOR_FORCE
+#ifdef TT
         tt_manager(),
 #endif
-        hard_manager(), system_hard_one_cluster(), system_hard_isolated(), 
+        hard_manager(), system_hard_one_cluster(), system_hard_isolated(),
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
         system_hard_connected(), 
 #endif
@@ -1044,6 +1041,7 @@ public:
 #endif
 #ifdef PROFILE
         profile.force_correct.barrier();
+        PS::Comm::barrier();
         profile.force_correct.end();
 #endif
     }
@@ -1053,23 +1051,6 @@ public:
 #ifdef PROFILE
         profile.other.start();
 #endif
-
-        if (input_parameters.external_force_mode.value == "tt") {
-            // 1) Bring tensor to current time
-            ext_tt_mgr.update(stat.time);
-            // 2) Choose the reference point r0(t)
-            ext_tt_mgr.setReference(stat.pcm.pos);
-            // 3) Apply a_ext = T(t) · (r - r0) to local particles
-            for (PS::S32 i = 0; i < system_soft.getNumberOfParticleLocal(); i++) {
-                PS::F64vec aext = ext_tt_mgr.accel(system_soft[i].pos);
-                system_soft[i].acc += aext;
-            }
-        }
-
-#ifdef PROFILE
-        profile.other.end();
-#endif
-    }
 
 #ifdef GALPY
         // external force and potential
@@ -1090,7 +1071,7 @@ public:
 #else
             PS::F64vec pos_center=pi.pos - stat.pcm.pos;
             galpy_manager.calcAccPot(acc, pot, stat.time, input_parameters.gravitational_constant.value*pi.mass, &pi.pos[0], &pos_center[0]);
-#endif //Potential apply 
+#endif
             assert(!std::isinf(acc[0]));
             assert(!std::isnan(acc[0]));
             assert(!std::isinf(pot));
@@ -1106,26 +1087,33 @@ public:
         }
 #endif //GALPY
 
-#ifdef EXTERNAL_TENSOR_FORCE
-        // Update tensor to current time
-        tt_manager.update(stat.time, true);
-        
-        // Set reference point (e.g., cluster center)
-        tt_manager.setReference(stat.pcm.pos);
-        
-        // Apply tensor force to all particles
+#ifdef TT
         PS::S64 n_loc_all = system_soft.getNumberOfParticleLocal();
-        #pragma omp parallel for
-        for (int i = 0; i < n_loc_all; i++) {
+#pragma omp parallel for
+        for (int i=0; i<n_loc_all; i++) {
             auto& pi = system_soft[i];
-            PS::F64vec aext = tt_manager.accel(pi.pos);
-            
-            // Add acceleration to particle
-            pi.acc[0] += aext[0];
-            pi.acc[1] += aext[1];
-            pi.acc[2] += aext[2];
-        }
+            double acc[3], pot;
+#ifdef RECORD_CM_IN_HEADER
+            PS::F64vec pos_correct=pi.pos + stat.pcm.pos;
+            tt_manager.calcAccPot(acc, pot, stat.time, input_parameters.gravitational_constant.value*pi.mass, &pos_correct[0], &pi.pos[0]);
+#else
+            PS::F64vec pos_center=pi.pos - stat.pcm.pos;
+            tt_manager.calcAccPot(acc, pot, stat.time, input_parameters.gravitational_constant.value*pi.mass, &pi.pos[0], &pos_center[0]);
 #endif
+            assert(!std::isinf(acc[0]));
+            assert(!std::isnan(acc[0]));
+            assert(!std::isinf(pot));
+            assert(!std::isnan(pot));
+            pi.acc[0] += acc[0]; 
+            pi.acc[1] += acc[1]; 
+            pi.acc[2] += acc[2]; 
+            pi.pot_tot += pot;
+            pi.pot_soft += pot;
+#ifdef EXTERNAL_POT_IN_PTCL
+            pi.pot_ext = pot;
+#endif
+        }
+#endif //TT
         
 #ifdef PROFILE
         profile.other.barrier();
@@ -1146,8 +1134,8 @@ public:
         // set zero mass to avoid duplicate anti force to potential set
         galpy_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
         dv = acc*_dt;
-#endif        //Theres two postions, CM-global and relative position to cm for each star 
-#ifdef EXTERNAL_TENSOR_FORCE
+#endif
+#ifdef TT
         PS::F64vec acc;
         PS::F64 pot;
         // evaluate center of mass acceleration
@@ -1155,7 +1143,7 @@ public:
         // set zero mass to avoid duplicate anti force to potential set
         tt_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
         dv = acc*_dt;
-#endif 
+#endif        
 
         stat.pcm.vel += dv;
         for (int i=0; i<stat.n_all_loc; i++) system_soft[i].vel -= dv;
@@ -1428,7 +1416,7 @@ public:
 
 #ifdef GALPY
         galpy_manager.kickMovePot(_dt_kick);
-#endif //No need this
+#endif
 
 #ifdef RECORD_CM_IN_HEADER
         // correct Ptcl:vel_cm
@@ -1572,7 +1560,7 @@ public:
 
 #ifdef GALPY
         galpy_manager.driftMovePot(_dt_drift);
-#endif //No need this
+#endif
         
         if (n_interrupt_glb==0) Ptcl::group_data_mode = GroupDataMode::cm;
         
@@ -1949,6 +1937,9 @@ public:
 #ifdef GALPY
         if (print_flag) galpy_manager.printData(std::cout);
 #endif
+#ifdef TT
+        if (print_flag) tt_manager.printData(std::cout);
+#endif
         // write status, output to separate snapshots
         if(write_style==1) {
 
@@ -1980,11 +1971,11 @@ public:
 #ifdef GALPY
                 // for External potential
                 galpy_manager.writePotentialPars(fname+".galpy", stat.time);
-#endif 
-#ifdef EXTERNAL_TENSOR_FORCE
+#endif
+#ifdef TT
                 // for External potential
                 tt_manager.writePotentialPars(fname+".tt", stat.time);
-#endif //Backup to restart the simulation
+#endif
             }
         }
         // write all information in to fstatus
@@ -2564,10 +2555,9 @@ public:
 #ifdef GALPY
         fout<<"Use external potential: Galpy\n";
 #endif 
-
-#ifdef EXTERNAL_TENSOR_FORCE
-        fout<<"Use external potential: tt\n";
-#endif 
+#ifdef TT
+        fout<<"Use external potential: TT\n";
+#endif
 
 #ifdef KDKDK_2ND
         fout<<"Use 2nd-order KDKDK mode for tree step\n";
@@ -2676,12 +2666,12 @@ public:
         if (my_rank==0) galpy_parameters.print_flag=true;
         else galpy_parameters.print_flag=false;
         galpy_parameters.read(argc,argv);
-#endif //Do similar
-#ifdef EXTERNAL_TENSOR_FORCE
+#endif
+#ifdef TT
         if (my_rank==0) tt_parameters.print_flag=true;
         else tt_parameters.print_flag=false;
         tt_parameters.read(argc,argv);
-#endif //Do similar
+#endif
 
         // help case, return directly
         if (read_flag==-1) {
@@ -3131,15 +3121,6 @@ public:
         bool print_flag = input_parameters.print_flag;
         int write_style = input_parameters.write_style.value;
         std::cout<<std::setprecision(WRITE_PRECISION);
-        
-        // Initialize tidal tensor if enabled
-        if (external_force_mode.value == "tt") {
-            bool ok = ext_tt_mgr.initial(tt_parameters, input_parameters.print_flag);
-            if (!ok) {
-                std::cerr << "Error: Failed to initialize tidal tensor\n";
-                std::exit(1);
-            }
-        }
 
         // units
         if (input_parameters.unit_set.value==1) {
@@ -3430,7 +3411,7 @@ public:
         std::string galpy_conf_filename = input_parameters.fname_inp.value+".galpy";
         galpy_manager.initial(galpy_parameters, stat.time, galpy_conf_filename, restart_flag, print_flag);
 #endif
-#ifdef EXTERNAL_TENSOR_FORCE
+#ifdef TT
         std::string tt_conf_filename = input_parameters.fname_inp.value+".tt";
         tt_manager.initial(tt_parameters, stat.time, tt_conf_filename, restart_flag, print_flag);
 #endif
@@ -4140,4 +4121,3 @@ public:
 };
 
 bool PeTar::initial_fdps_flag = false;
-

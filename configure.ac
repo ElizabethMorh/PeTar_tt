@@ -352,10 +352,10 @@ AC_ARG_WITH([interrupt],
                                           [FCFLAGS=$FCFLAGS" -Wall"])])],
 	    [with_interrupt=off])
 
-# external potential - galpy and tt
+# external potential
 AC_ARG_WITH([external],
-          [AS_HELP_STRING([--with-external=TYPE],
-                          [External potential: galpy, tt (tidal tensor), or off (default)])],  
+	    [AS_HELP_STRING([--with-external],
+	                    [External potential: Default: off])],
             [PROG_NAME=$PROG_NAME'.'$with_external
 	     AS_IF([test x"$with_external" == xgalpy],
 	           [AC_LANG([C])
@@ -398,13 +398,9 @@ AC_ARG_WITH([external],
                                         [],
                                         [AC_MSG_FAILURE([can't find GSL library, please install it first, e.g. in Ubuntu 20.04, use sudo apt install libgsl-dev])],[-lgslcblas])
                            GSL_LIBS='-lgsl -lgslcblas'])])],
-                        [test x"$with_external" = xtt],
-                        [AC_DEFINE([EXTERNAL_TENSOR_FORCE], [1], [Enable tidal tensor external force])
-                              EXTERNAL_OBJ="external_tensor_force.o $EXTERNAL_OBJ"
-                              AC_MSG_NOTICE([Tidal tensor external force enabled])],
-                        [AC_MSG_ERROR([Unknown external potential type: $with_external])],
-                  [with_external=off])
-   
+	    [with_external=off])
+            
+
 # tidal tensor 3rd order mode
 AC_ARG_WITH([tidal-tensor],
 	    [AS_HELP_STRING([--with-tidal-tensor],
