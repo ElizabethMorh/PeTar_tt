@@ -688,7 +688,7 @@ public:
     GalpyManager galpy_manager;
 #endif
 #ifdef TT
-    TTManager tt_manager;
+    TidalTensorManager tt_manager;
 #endif
 
     // hard integrator

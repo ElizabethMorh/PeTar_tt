@@ -118,6 +118,9 @@ EXT_INSTALL:
 EXT_CLEAN:
 	$(MAKE) -C galpy-interface clean
 endif
+ifeq ($(ext_mode),tt)
+MT_FLAGS += -D TT
+endif
 
 ifeq ($(step_mode),kdkdk)
 MT_FLAGS += -D KDKDK_2ND
