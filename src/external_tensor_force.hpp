@@ -287,5 +287,3 @@ private:
                 Tcur_[i][j] = Tin[i][j];
     }
 };
-
-#endif // EXTERNAL_TENSOR_FORCE_HPP
