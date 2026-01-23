@@ -206,12 +206,21 @@ public:
         if (t == last_time_) return;
         last_time_ = t;
 
+        static bool first_call = true;
+        if (first_call) {
+            first_call = false;
+            std::string logfile = "tidal_tensor_log.dat";
+            writeLogHeader(logfile);
+        }
+
         if (t <= snaps_.front().time) {
             copy(snaps_.front().T);
+            logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
         if (t >= snaps_.back().time) {
             copy(snaps_.back().T);
+            logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
 
@@ -223,9 +232,14 @@ public:
         const auto& s1 = snaps_[last_idx_+1];
         double w = (t - s0.time)/(s1.time - s0.time);
 
-        for (int i=0;i<3;i++)
-            for (int j=0;j<3;j++)
+        for (int i=0;i<3;i++) {
+            for (int j=0;j<3;j++) {
                 Tcur_[i][j] = (1.0-w)*s0.T[i][j] + w*s1.T[i][j];
+            }
+        }
+        
+        // Log the interpolated tensor
+        logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
     }
 
     /************************************************
@@ -268,8 +282,10 @@ public:
     }
 
     void printData(std::ostream& out) const {
-        if (enabled_)
+        if (enabled_) {
             out << "External potential: Tidal Tensor (tt.dat)\n";
+            out << "  Logging tidal tensor data to: tidal_tensor_log.dat\n";
+        }
     }
 
     void writePotentialPars(const std::string& fname,
@@ -285,5 +301,29 @@ private:
         for (int i=0;i<3;i++)
             for (int j=0;j<3;j++)
                 Tcur_[i][j] = Tin[i][j];
+    }
+
+    // Log tidal tensor data to a file
+    void logTidalTensor(const std::string& fname, double time, const double T[3][3]) {
+        std::ofstream fout(fname, std::ios::app);
+        if (!fout) return;
+        
+        fout << std::scientific << std::setprecision(15) << time * tscale_ << " ";
+        for (int i=0; i<3; i++)
+            for (int j=0; j<3; j++)
+                fout << T[i][j] << " ";
+        fout << "\n";
+    }
+
+    // Write header for the tidal tensor log file
+    void writeLogHeader(const std::string& fname) {
+        if (PS::Comm::getRank() != 0) return; // Only write from rank 0
+        
+        std::ofstream fout(fname);
+        if (!fout) return;
+        
+        fout << "# Tidal Tensor Log\n";
+        fout << "# Time "
+             << "T11 T12 T13 T21 T22 T23 T31 T32 T33\n";
     }
 };
