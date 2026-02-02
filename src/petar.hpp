@@ -3540,6 +3540,18 @@ public:
             galpy_parameters.input_par_store.writeAscii(fpar_out);
             fclose(fpar_out);
 #endif
+
+#ifdef TT
+            // save tt parameters
+            std::string ftt_par = input_parameters.fname_par.value + ".tt";
+            if (print_flag) std::cout<<"Save tt_parameters to file "<<ftt_par<<std::endl;
+            if( (fpar_out = fopen(ftt_par.c_str(),"w")) == NULL) {
+                fprintf(stderr,"Error: Cannot open file %s.\n", ftt_par.c_str());
+                abort();
+            }
+            tt_parameters.input_par_store.writeAscii(fpar_out);
+            fclose(fpar_out);
+#endif
         }
 
         // initial tree step manager

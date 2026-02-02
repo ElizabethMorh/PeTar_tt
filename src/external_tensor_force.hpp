@@ -211,29 +211,67 @@ public:
             first_call = false;
             std::string logfile = "tidal_tensor_log.dat";
             writeLogHeader(logfile);
+            
+            // Log initial snapshot times for debugging
+            std::ofstream fout("tidal_tensor_snapshots.dat");
+            if (fout) {
+                fout << "# Snapshot times and first tensor element for reference\n";
+                for (const auto& snap : snaps_) {
+                    fout << snap.time << " " << snap.T[0][0] << "\n";
+                }
+            }
         }
 
+        // Handle edge cases
         if (t <= snaps_.front().time) {
             copy(snaps_.front().T);
+            if (print_flag_) {
+                std::cerr << "[TT] Using first snapshot at t=" << t << " (before first snapshot)\n";
+            }
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
         if (t >= snaps_.back().time) {
             copy(snaps_.back().T);
+            if (print_flag_) {
+                std::cerr << "[TT] Using last snapshot at t=" << t << " (after last snapshot)\n";
+            }
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
 
+        // Find the right interval for interpolation
         while (last_idx_+1 < snaps_.size() &&
-               snaps_[last_idx_+1].time < t)
+               snaps_[last_idx_+1].time < t) {
             last_idx_++;
+        }
+        while (last_idx_ > 0 && snaps_[last_idx_].time > t) {
+            last_idx_--;
+        }
 
         const auto& s0 = snaps_[last_idx_];
         const auto& s1 = snaps_[last_idx_+1];
-        double w = (t - s0.time)/(s1.time - s0.time);
+        
+        // Calculate interpolation weight with bounds checking
+        double dt = s1.time - s0.time;
+        double w = 0.0;
+        if (dt > 0.0) {
+            w = (t - s0.time) / dt;
+            // Ensure w is in [0,1] to prevent numerical issues
+            w = std::max(0.0, std::min(1.0, w));
+        }
 
-        for (int i=0;i<3;i++) {
-            for (int j=0;j<3;j++) {
+        if (print_flag_ && last_time_ > 0) {
+            std::cerr << "[TT] Interpolating at t=" << t 
+                     << " between t0=" << s0.time << " and t1=" << s1.time
+                     << " (w=" << w << ")\n";
+            std::cerr << "[TT] T00: " << s0.T[0][0] << " -> " << s1.T[0][0]
+                     << " = " << (1.0-w)*s0.T[0][0] + w*s1.T[0][0] << "\n";
+        }
+
+        // Perform linear interpolation
+        for (int i=0; i<3; i++) {
+            for (int j=0; j<3; j++) {
                 Tcur_[i][j] = (1.0-w)*s0.T[i][j] + w*s1.T[i][j];
             }
         }
@@ -288,12 +326,131 @@ public:
         }
     }
 
+    //! Write tidal tensor data for restart
+    /*! 
+      @param[in] fname: file to save data
+      @param[in] time: current simulation time
+    */
     void writePotentialPars(const std::string& fname,
-                            const double time) const {
+                          const double time) const {
         if (!enabled_) return;
+        
         std::ofstream fout(fname.c_str());
-        fout << "# External tidal tensor\n";
+        if (!fout) {
+            std::cerr << "Error: Cannot open file " << fname << " for writing tidal tensor data\n";
+            return;
+        }
+        
+        fout << std::scientific << std::setprecision(15);
+        fout << "# External tidal tensor restart data\n";
         fout << "# time = " << time << "\n";
+        fout << "# last_time last_idx\n";
+        fout << last_time_ << " " << last_idx_ << "\n";
+        
+        // Save current tensor state
+        fout << "# Current tidal tensor (3x3 matrix):\n";
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                fout << Tcur_[i][j] << " ";
+            }
+            fout << "\n";
+        }
+        
+        // Save all snapshots
+        fout << "# Number of snapshots: " << snaps_.size() << "\n";
+        fout << "# time T11 T12 T13 T21 T22 T23 T31 T32 T33\n";
+        for (const auto& snap : snaps_) {
+            fout << snap.time << " ";
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    fout << snap.T[i][j] << " ";
+                }
+            }
+            fout << "\n";
+        }
+        
+        if (print_flag_) {
+            std::cerr << "[TT] Wrote restart data to " << fname << "\n";
+        }
+    }
+    
+    //! Read tidal tensor data from restart file
+    /*! 
+      @param[in] fname: file to read data from
+      @return true if successful, false otherwise
+    */
+    bool readRestartData(const std::string& fname) {
+        std::ifstream fin(fname.c_str());
+        if (!fin) {
+            std::cerr << "[TT] Warning: Cannot open restart file " << fname << "\n";
+            return false;
+        }
+        
+        std::string line;
+        double time;
+        size_t idx;
+        
+        // Skip comments and read last_time_ and last_idx_
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            std::istringstream iss(line);
+            if (!(iss >> last_time_ >> last_idx_)) {
+                std::cerr << "[TT] Error reading restart data (time and index)\n";
+                return false;
+            }
+            break;
+        }
+        
+        // Read current tensor state
+        for (int i = 0; i < 3; i++) {
+            if (!std::getline(fin, line)) {
+                std::cerr << "[TT] Error reading tensor data\n";
+                return false;
+            }
+            std::istringstream iss(line);
+            for (int j = 0; j < 3; j++) {
+                if (!(iss >> Tcur_[i][j])) {
+                    std::cerr << "[TT] Error reading tensor element [" << i << "][" << j << "]\n";
+                    return false;
+                }
+            }
+        }
+        
+        // Read snapshots
+        size_t num_snaps = 0;
+        while (std::getline(fin, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            if (line.find("Number of snapshots:") != std::string::npos) {
+                std::istringstream iss(line.substr(line.find(":") + 1));
+                if (!(iss >> num_snaps)) {
+                    std::cerr << "[TT] Error reading number of snapshots\n";
+                    return false;
+                }
+                snaps_.reserve(num_snaps);
+                continue;
+            }
+            
+            Snapshot snap;
+            std::istringstream iss(line);
+            if (!(iss >> snap.time)) continue;
+            
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    if (!(iss >> snap.T[i][j])) {
+                        std::cerr << "[TT] Error reading snapshot tensor data\n";
+                        return false;
+                    }
+                }
+            }
+            snaps_.push_back(snap);
+        }
+        
+        if (print_flag_) {
+            std::cerr << "[TT] Read restart data from " << fname 
+                     << " (" << snaps_.size() << " snapshots)\n";
+        }
+        
+        return true;
     }
 
 private:
