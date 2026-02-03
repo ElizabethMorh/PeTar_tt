@@ -188,6 +188,12 @@ public:
         const double time_scale = params.tt_unit.value / tscale_;
         const double tensor_scale = time_scale * time_scale;
 
+        if (print_flag_) {
+            std::cerr << "[TT] Time conversion: tt_unit=" << params.tt_unit.value 
+                     << " tt_offset=" << params.tt_offset.value 
+                     << " tscale=" << tscale_ << " time_scale=" << time_scale << "\n";
+        }
+
         std::string line;
 
         while (std::getline(fin, line)) {
@@ -250,7 +256,10 @@ public:
         if (t <= snaps_.front().time) {
             copy(snaps_.front().T);
             if (print_flag_) {
-                std::cerr << "[TT] Using first snapshot at t=" << t << " (before first snapshot)\n";
+                std::cerr << "[TT] WARNING: Simulation time " << t 
+                         << " is before first tidal tensor snapshot at " 
+                         << snaps_.front().time << "\n";
+                std::cerr << "[TT] Using first snapshot - this may cause integrator issues!\n";
             }
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
