@@ -5,6 +5,8 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
+#include <iomanip>
+#include <algorithm>
 
 /****************************************************
  * IO parameters
@@ -15,6 +17,8 @@ public:
     IOParams<std::string> tt_filename;
     IOParams<double> rscale;
     IOParams<double> vscale;
+    IOParams<double> tt_unit;
+    IOParams<double> tt_offset;
 
     bool print_flag;
 
@@ -26,14 +30,20 @@ public:
                "Length scale: IN → TT"),
         vscale(input_par_store, 1.0, "tt-vscale",
                "Velocity scale: IN → TT"),
+        tt_unit(input_par_store, 1.0, "tt-unit",
+                "Myr per galactic time unit"),
+        tt_offset(input_par_store, 0.0, "tt-offset",
+                  "Time offset of tidal tensor in Myr"),
         print_flag(false) {}
 
     int read(int argc, char *argv[], const int opt_used_pre=0) {
         static int tt_flag = -1;
         const struct option long_options[] = {
             {tt_filename.key, required_argument, &tt_flag, 1},
-            {rscale.key,      required_argument, &tt_flag, 3},
-            {vscale.key,      required_argument, &tt_flag, 5},
+            {rscale.key,      required_argument, &tt_flag, 2},
+            {vscale.key,      required_argument, &tt_flag, 3},
+            {tt_unit.key,     required_argument, &tt_flag, 4},
+            {tt_offset.key,   required_argument, &tt_flag, 5},
             {"help", no_argument, 0, 'h'},
             {0,0,0,0}
         };
@@ -50,11 +60,11 @@ public:
                     tt_filename.value = optarg;
                     opt_used += 2;
                 }
-                else if (tt_flag == 3) {
+                else if (tt_flag == 2) {
                     rscale.value = atof(optarg);
                     opt_used += 2;
                 }
-                else if (tt_flag == 5) {
+                else if (tt_flag == 3) {
                     vscale.value = atof(optarg);
                     opt_used += 2;
                 }
@@ -124,7 +134,8 @@ public:
         last_idx_(0),
         last_time_(-1.0),
         rscale_(1.0),
-        vscale_(1.0) {}
+        vscale_(1.0),
+        tscale_(1.0) {}
 
     /************************************************
      * Initialization
@@ -150,10 +161,10 @@ public:
         }
 
         if (!restart_flag) {
-            if (!load(params.tt_filename.value)) {
+            if (!load(params.tt_filename.value, params)) {
                 enabled_ = false;
                 if (print_flag_)
-                    std::cerr << "[TT] Disabled (file not found)\n";
+                    std::cerr << "[TT] Disabled (tt.dat file not found)\n";
                 return;
             }
         }
@@ -162,17 +173,21 @@ public:
         update(time);
 
         if (print_flag_)
-            std::cerr << "[TT] Enabled\n";
+            std::cerr << "[TT] External tidal tensor enabled\n";
     }
 
     /************************************************
      * Read tt.dat
      ************************************************/
-    bool load(const std::string& fname) {
+    bool load(const std::string& fname, const IOParamsTT& params) {
         std::ifstream fin(fname);
         if (!fin) return false;
 
         snaps_.clear();
+
+        const double time_scale = params.tt_unit.value / tscale_;
+        const double tensor_scale = time_scale * time_scale;
+
         std::string line;
 
         while (std::getline(fin, line)) {
@@ -180,11 +195,20 @@ public:
 
             Snapshot s;
             std::istringstream iss(line);
-            iss >> s.time;
+
+            double t_gal;
+            iss >> t_gal;
+
+            s.time = (t_gal * params.tt_unit.value + params.tt_offset.value)
+                    / tscale_;
 
             for (int i=0;i<3;i++)
                 for (int j=0;j<3;j++)
                     iss >> s.T[i][j];
+            
+            for (int i=0;i<3;i++)
+                for (int j=0;j<3;j++)
+                    s.T[i][j] *= tensor_scale;
 
             snaps_.push_back(s);
         }
@@ -202,7 +226,7 @@ public:
     void update(double time_in) {
         if (!enabled_) return;
 
-        double t = time_in * tscale_;
+        double t = time_in;
         if (t == last_time_) return;
         last_time_ = t;
 
@@ -465,7 +489,7 @@ private:
         std::ofstream fout(fname, std::ios::app);
         if (!fout) return;
         
-        fout << std::scientific << std::setprecision(15) << time * tscale_ << " ";
+        fout << std::scientific << std::setprecision(15) << time << " ";
         for (int i=0; i<3; i++)
             for (int j=0; j<3; j++)
                 fout << T[i][j] << " ";
@@ -473,9 +497,7 @@ private:
     }
 
     // Write header for the tidal tensor log file
-    void writeLogHeader(const std::string& fname) {
-        if (PS::Comm::getRank() != 0) return; // Only write from rank 0
-        
+    void writeLogHeader(const std::string& fname) {        
         std::ofstream fout(fname);
         if (!fout) return;
         
