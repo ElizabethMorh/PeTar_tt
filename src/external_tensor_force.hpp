@@ -233,13 +233,6 @@ public:
                                  << "time_unit=" << values[1] << " Myr, "
                                  << "time_offset=" << values[2] << " Myr\n";
                     }
-                    // Override parameters with header values if they're defaults
-                    if (params.tt_unit.value == 1.0) {
-                        const_cast<IOParamsTT&>(params).tt_unit.value = values[1];
-                    }
-                    if (params.tt_offset.value == 0.0) {
-                        const_cast<IOParamsTT&>(params).tt_offset.value = values[2];
-                    }
                     continue;
                 }
             }
