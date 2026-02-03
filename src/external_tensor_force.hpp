@@ -151,6 +151,13 @@ public:
         rscale_ = params.rscale.value;
         vscale_ = params.vscale.value;
 
+        if (vscale_ <= 0.0 || rscale_ <= 0.0) {
+            std::cerr << "[TT] ERROR: Invalid scale parameters - rscale=" << rscale_ 
+                     << " vscale=" << vscale_ << "\n";
+            enabled_ = false;
+            return;
+        }
+
         tscale_ = rscale_/vscale_;
         fscale_ = vscale_*vscale_/rscale_;
         pscale_ = vscale_*vscale_;
@@ -207,6 +214,13 @@ public:
 
             s.time = (t_gal * params.tt_unit.value + params.tt_offset.value)
                     / tscale_;
+
+            // Check for invalid time conversion
+            if (std::isnan(s.time) || std::isinf(s.time)) {
+                std::cerr << "[TT] ERROR: Invalid time conversion - t_gal=" << t_gal 
+                         << " tscale=" << tscale_ << "\n";
+                return false;
+            }
 
             for (int i=0;i<3;i++)
                 for (int j=0;j<3;j++)
