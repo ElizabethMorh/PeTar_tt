@@ -17,8 +17,6 @@ public:
     IOParams<std::string> tt_filename;
     IOParams<double> rscale;
     IOParams<double> vscale;
-    IOParams<double> tt_unit;
-    IOParams<double> tt_offset;
 
     bool print_flag;
 
@@ -30,10 +28,6 @@ public:
                "Length scale: IN → TT"),
         vscale(input_par_store, 1.0, "tt-vscale",
                "Velocity scale: IN → TT"),
-        tt_unit(input_par_store, 1.0, "tt-unit",
-                "Myr per galactic time unit"),
-        tt_offset(input_par_store, 0.0, "tt-offset",
-                  "Time offset of tidal tensor in Myr"),
         print_flag(false) {}
 
     int read(int argc, char *argv[], const int opt_used_pre=0) {
@@ -42,8 +36,6 @@ public:
             {tt_filename.key, required_argument, &tt_flag, 1},
             {rscale.key,      required_argument, &tt_flag, 2},
             {vscale.key,      required_argument, &tt_flag, 3},
-            {tt_unit.key,     required_argument, &tt_flag, 4},
-            {tt_offset.key,   required_argument, &tt_flag, 5},
             {"help", no_argument, 0, 'h'},
             {0,0,0,0}
         };
@@ -192,27 +184,89 @@ public:
 
         snaps_.clear();
 
-        const double time_scale = params.tt_unit.value / tscale_;
+        // Read header first to get proper time units
+        std::ifstream fin_temp(fname);
+        if (!fin_temp) return false;
+        
+        std::string header_line;
+        while (std::getline(fin_temp, header_line)) {
+            if (!header_line.empty() && header_line[0] != '#') break;
+        }
+        
+        std::istringstream header_iss(header_line);
+        std::vector<double> header_vals;
+        double val;
+        while (header_iss >> val) header_vals.push_back(val);
+        
+        // Use header values directly
+        double effective_tt_unit = header_vals[1];
+        double effective_tt_offset = header_vals[2];
+        
+        const double time_scale = effective_tt_unit / tscale_;
         const double tensor_scale = time_scale * time_scale;
 
         if (print_flag_) {
-            std::cerr << "[TT] Time conversion: tt_unit=" << params.tt_unit.value 
-                     << " tt_offset=" << params.tt_offset.value 
+            std::cerr << "[TT] Time conversion: tt_unit=" << effective_tt_unit 
+                     << " tt_offset=" << effective_tt_offset 
                      << " tscale=" << tscale_ << " time_scale=" << time_scale << "\n";
         }
 
         std::string line;
+        int line_count = 0;
+        int expected_snapshots = -1;
 
         while (std::getline(fin, line)) {
+            line_count++;
             if (line.empty() || line[0]=='#') continue;
+            
+            // First line should be header: n_snapshots time_unit time_offset
+            if (expected_snapshots == -1) {
+                std::istringstream iss(line);
+                std::vector<double> values;
+                double val;
+                while (iss >> val) values.push_back(val);
+                
+                if (values.size() == 3) {
+                    expected_snapshots = static_cast<int>(values[0]);
+                    if (print_flag_) {
+                        std::cerr << "[TT] Header: " << expected_snapshots << " snapshots, "
+                                 << "time_unit=" << values[1] << " Myr, "
+                                 << "time_offset=" << values[2] << " Myr\n";
+                    }
+                    // Override parameters with header values if they're defaults
+                    if (params.tt_unit.value == 1.0) {
+                        const_cast<IOParamsTT&>(params).tt_unit.value = values[1];
+                    }
+                    if (params.tt_offset.value == 0.0) {
+                        const_cast<IOParamsTT&>(params).tt_offset.value = values[2];
+                    }
+                    continue;
+                }
+            }
+            
+            // Data lines should have exactly 10 values (time + 9 tensor elements)
+            std::istringstream iss(line);
+            std::vector<double> values;
+            double val;
+            while (iss >> val) values.push_back(val);
+            
+            if (values.size() != 10) {
+                if (print_flag_) {
+                    std::cerr << "[TT] Skipping line " << line_count 
+                             << " (incorrect number of values: " << values.size() << ")\n";
+                }
+                continue;
+            }
 
             Snapshot s;
-            std::istringstream iss(line);
+            // Reuse the existing stringstream
+            iss.clear();
+            iss.seekg(0, std::ios::beg);
 
             double t_gal;
             iss >> t_gal;
 
-            s.time = (t_gal * params.tt_unit.value + params.tt_offset.value)
+            s.time = (t_gal * effective_tt_unit + effective_tt_offset)
                     / tscale_;
 
             // Check for invalid time conversion
