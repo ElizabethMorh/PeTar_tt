@@ -154,6 +154,12 @@ public:
         fscale_ = vscale_*vscale_/rscale_;
         pscale_ = vscale_*vscale_;
 
+        if (print_flag_) {
+            std::cerr << "[TT] Scale factors: rscale=" << rscale_ 
+                     << " vscale=" << vscale_ << " tscale=" << tscale_
+                     << " fscale=" << fscale_ << " pscale=" << pscale_ << "\n";
+        }
+
         if (params.tt_filename.value == "__NONE__") {
             enabled_ = false;
             return;
@@ -343,8 +349,25 @@ public:
             last_idx_--;
         }
 
+        // Use nearest neighbor if time difference is small enough
         const auto& s0 = snaps_[last_idx_];
         const auto& s1 = snaps_[last_idx_+1];
+        
+        double dt_to_s0 = std::abs(t - s0.time);
+        double dt_to_s1 = std::abs(t - s1.time);
+        double dt_snapshots = s1.time - s0.time;
+        
+        // If we're very close to a snapshot (within 1% of dt), use it directly
+        if (dt_to_s0 < 0.01 * dt_snapshots) {
+            copy(s0.T);
+            logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
+            return;
+        }
+        if (dt_to_s1 < 0.01 * dt_snapshots) {
+            copy(s1.T);
+            logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
+            return;
+        }
         
         // Calculate interpolation weight with bounds checking
         double dt = s1.time - s0.time;
@@ -355,7 +378,7 @@ public:
             w = std::max(0.0, std::min(1.0, w));
         }
 
-        if (print_flag_ && last_time_ > 0) {
+        if (print_flag_ && false) {  // Disabled interpolation verbose output
             std::cerr << "[TT] Interpolating at t=" << t 
                      << " between t0=" << s0.time << " and t1=" << s1.time
                      << " (w=" << w << ")\n";
@@ -411,6 +434,18 @@ public:
         acc[1] *= fscale_;
         acc[2] *= fscale_;
         pot    *= pscale_;
+        
+        // Safety checks to prevent numerical instability
+        for (int i=0; i<3; i++) {
+            if (std::isnan(acc[i]) || std::isinf(acc[i])) {
+                std::cerr << "[TT] ERROR: Invalid acceleration detected - resetting to zero\n";
+                acc[i] = 0.0;
+            }
+        }
+        if (std::isnan(pot) || std::isinf(pot)) {
+            std::cerr << "[TT] ERROR: Invalid potential detected - resetting to zero\n";
+            pot = 0.0;
+        }
     }
 
     void printData(std::ostream& out) const {
