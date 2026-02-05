@@ -204,17 +204,22 @@ public:
         double val;
         while (header_iss >> val) header_vals.push_back(val);
         
-        // Use header values directly
-        double effective_tt_unit = header_vals[1];
-        double effective_tt_offset = header_vals[2];
+        // All tt.dat files use Myr units (from convert.py or nbody6tt)
+        // Use standard PeTar_tt scaling - no complex conversion needed
+        double effective_tt_unit = header_vals[1];  // tt_unit in Myr
+        double effective_tt_offset = header_vals[2]; // tt_offset in Myr
         
+        // Since input is already in Myr units, scaling is simple
         const double time_scale = effective_tt_unit / tscale_;
-        const double tensor_scale = time_scale * time_scale;
+        const double tensor_scale = (tscale_ / effective_tt_unit) * (tscale_ / effective_tt_unit);
 
         if (print_flag_) {
-            std::cerr << "[TT] Time conversion: tt_unit=" << effective_tt_unit 
-                     << " tt_offset=" << effective_tt_offset 
-                     << " tscale=" << tscale_ << " time_scale=" << time_scale << "\n";
+            std::cerr << "[TT] Loading tt.dat with Myr units\n";
+            std::cerr << "[TT] tt_unit=" << effective_tt_unit << " Myr\n";
+            std::cerr << "[TT] tt_offset=" << effective_tt_offset << " Myr\n";
+            std::cerr << "[TT] Using standard PeTar_tt scaling\n";
+            std::cerr << "[TT] Time scale: " << time_scale << "\n";
+            std::cerr << "[TT] Tensor scale: " << tensor_scale << "\n";
         }
 
         std::string line;
@@ -262,15 +267,15 @@ public:
             iss.clear();
             iss.seekg(0, std::ios::beg);
 
-            double t_gal;
-            iss >> t_gal;
+            double t_input;
+            iss >> t_input;
 
-            s.time = (t_gal * effective_tt_unit + effective_tt_offset)
-                    / tscale_;
+            // Convert input time (Myr) to PeTar internal units
+            s.time = (t_input + effective_tt_offset) / tscale_;
 
             // Check for invalid time conversion
             if (std::isnan(s.time) || std::isinf(s.time)) {
-                std::cerr << "[TT] ERROR: Invalid time conversion - t_gal=" << t_gal 
+                std::cerr << "[TT] ERROR: Invalid time conversion - t_input=" << t_input 
                          << " tscale=" << tscale_ << "\n";
                 return false;
             }
@@ -279,6 +284,7 @@ public:
                 for (int j=0;j<3;j++)
                     iss >> s.T[i][j];
             
+            // Convert input tensor (Myr^-2) to PeTar internal units
             for (int i=0;i<3;i++)
                 for (int j=0;j<3;j++)
                     s.T[i][j] *= tensor_scale;
