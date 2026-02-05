@@ -204,47 +204,46 @@ public:
         double val;
         while (header_iss >> val) header_vals.push_back(val);
         
-        // Detect format and set appropriate unit conversions
-        double effective_tt_unit, effective_tt_offset;
-        
-        if (header_vals.size() >= 3) {
-            // All tt.dat files use Myr units (from convert.py)
-// Use standard PeTar_tt scaling - no nbody6tt conversion needed
-effective_tt_unit = header_vals[1];  // tt_unit in Myr
-effective_tt_offset = header_vals[2]; // tt_offset in Myr
-
-if (print_flag_) {
-    std::cerr << "[TT] Loading tt.dat with Myr units\n";
-    std::cerr << "[TT] tt_unit=" << effective_tt_unit << " Myr\n";
-    std::cerr << "[TT] tt_offset=" << effective_tt_offset << " Myr\n";
-}
+        // Use header values directly
+        double effective_tt_unit = header_vals[1];
+        double effective_tt_offset = header_vals[2];
         
         const double time_scale = effective_tt_unit / tscale_;
-        
-        // Tensor scaling: standard PeTar_tt scaling (Myr units)
-double tensor_scale = (tscale_ / effective_tt_unit) * (tscale_ / effective_tt_unit);
+        const double tensor_scale = time_scale * time_scale;
 
-if (print_flag_) {
-    std::cerr << "[TT] Using standard PeTar_tt scaling\n";
-    std::cerr << "[TT] Tensor scaling factor: " << tensor_scale << "\n";
-}
-        
         if (print_flag_) {
             std::cerr << "[TT] Time conversion: tt_unit=" << effective_tt_unit 
                      << " tt_offset=" << effective_tt_offset 
                      << " tscale=" << tscale_ << " time_scale=" << time_scale << "\n";
-            std::cerr << "[TT] Tensor scaling: (tscale/tt_unit)^2 = (" 
-                     << tscale_ << "/" << effective_tt_unit << ")^2 = " << tensor_scale << "\n";
         }
 
         std::string line;
         int line_count = 0;
+        int expected_snapshots = -1;
 
         while (std::getline(fin, line)) {
             line_count++;
             if (line.empty() || line[0]=='#') continue;
             
-            // Skip potential header lines that don't have exactly 10 values
+            // First line should be header: n_snapshots time_unit time_offset
+            if (expected_snapshots == -1) {
+                std::istringstream iss(line);
+                std::vector<double> values;
+                double val;
+                while (iss >> val) values.push_back(val);
+                
+                if (values.size() == 3) {
+                    expected_snapshots = static_cast<int>(values[0]);
+                    if (print_flag_) {
+                        std::cerr << "[TT] Header: " << expected_snapshots << " snapshots, "
+                                 << "time_unit=" << values[1] << " Myr, "
+                                 << "time_offset=" << values[2] << " Myr\n";
+                    }
+                    continue;
+                }
+            }
+            
+            // Data lines should have exactly 10 values (time + 9 tensor elements)
             std::istringstream iss(line);
             std::vector<double> values;
             double val;
@@ -263,15 +262,15 @@ if (print_flag_) {
             iss.clear();
             iss.seekg(0, std::ios::beg);
 
-            double t_input;
-            iss >> t_input;
+            double t_gal;
+            iss >> t_gal;
 
-            s.time = (t_input * effective_tt_unit + effective_tt_offset)
+            s.time = (t_gal * effective_tt_unit + effective_tt_offset)
                     / tscale_;
 
             // Check for invalid time conversion
             if (std::isnan(s.time) || std::isinf(s.time)) {
-                std::cerr << "[TT] ERROR: Invalid time conversion - t_input=" << t_input 
+                std::cerr << "[TT] ERROR: Invalid time conversion - t_gal=" << t_gal 
                          << " tscale=" << tscale_ << "\n";
                 return false;
             }
@@ -321,7 +320,7 @@ if (print_flag_) {
         }
 
         // Handle edge cases
-        if (t < snaps_.front().time) {
+        if (t <= snaps_.front().time) {
             copy(snaps_.front().T);
             if (print_flag_) {
                 std::cerr << "[TT] WARNING: Simulation time " << t 
@@ -332,7 +331,7 @@ if (print_flag_) {
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
-        if (t > snaps_.back().time) {
+        if (t >= snaps_.back().time) {
             copy(snaps_.back().T);
             if (print_flag_) {
                 std::cerr << "[TT] Using last snapshot at t=" << t << " (after last snapshot)\n";
