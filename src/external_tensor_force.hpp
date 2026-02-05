@@ -205,7 +205,6 @@ public:
         while (header_iss >> val) header_vals.push_back(val);
         
         // Detect format and set appropriate unit conversions
-        bool is_nbody6tt_format = false;
         double effective_tt_unit, effective_tt_offset;
         
         if (header_vals.size() >= 3) {
@@ -240,31 +239,12 @@ if (print_flag_) {
 
         std::string line;
         int line_count = 0;
-        int expected_snapshots = -1;
 
         while (std::getline(fin, line)) {
             line_count++;
             if (line.empty() || line[0]=='#') continue;
             
-            // First line should be header: n_snapshots time_unit time_offset
-            if (expected_snapshots == -1) {
-                std::istringstream iss(line);
-                std::vector<double> values;
-                double val;
-                while (iss >> val) values.push_back(val);
-                
-                if (values.size() == 3) {
-                    expected_snapshots = static_cast<int>(values[0]);
-                    if (print_flag_) {
-                        std::cerr << "[TT] Header: " << expected_snapshots << " snapshots, "
-                                 << "time_unit=" << values[1] << " Myr, "
-                                 << "time_offset=" << values[2] << " Myr\n";
-                    }
-                    continue;
-                }
-            }
-            
-            // Data lines should have exactly 10 values (time + 9 tensor elements)
+            // Skip potential header lines that don't have exactly 10 values
             std::istringstream iss(line);
             std::vector<double> values;
             double val;
@@ -283,15 +263,15 @@ if (print_flag_) {
             iss.clear();
             iss.seekg(0, std::ios::beg);
 
-            double t_gal;
-            iss >> t_gal;
+            double t_input;
+            iss >> t_input;
 
-            s.time = (t_gal * effective_tt_unit + effective_tt_offset)
+            s.time = (t_input * effective_tt_unit + effective_tt_offset)
                     / tscale_;
 
             // Check for invalid time conversion
             if (std::isnan(s.time) || std::isinf(s.time)) {
-                std::cerr << "[TT] ERROR: Invalid time conversion - t_gal=" << t_gal 
+                std::cerr << "[TT] ERROR: Invalid time conversion - t_input=" << t_input 
                          << " tscale=" << tscale_ << "\n";
                 return false;
             }
