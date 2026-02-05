@@ -204,17 +204,153 @@ public:
         double val;
         while (header_iss >> val) header_vals.push_back(val);
         
-        // Use header values directly
-        double effective_tt_unit = header_vals[1];
-        double effective_tt_offset = header_vals[2];
+        // Detect format and set appropriate unit conversions
+        bool is_nbody6tt_format = false;
+        double effective_tt_unit, effective_tt_offset;
+        
+        if (header_vals.size() >= 3) {
+            // Check if this is nbody6tt format: [n_snapshots] [1] [0]
+            if (header_vals.size() == 3 && 
+                std::abs(header_vals[1] - 1.0) < 1e-10 && 
+                std::abs(header_vals[2] - 0.0) < 1e-10) {
+                
+                is_nbody6tt_format = true;
+                effective_tt_unit = 1.0;  // nbody6tt internal units
+                effective_tt_offset = 0.0;
+                
+                if (print_flag_) {
+                    std::cerr << "[TT] Detected nbody6tt format - applying unit conversion\n";
+                    std::cerr << "[TT] Converting: nbody units -> Myr, Gyr^-2 -> Myr^-2\n";
+                }
+            } else {
+                // Standard PeTar_tt format: [n_snapshots] [tt_unit] [tt_offset]
+                effective_tt_unit = header_vals[1];
+                effective_tt_offset = header_vals[2];
+                
+                if (print_flag_) {
+                    std::cerr << "[TT] Detected PeTar_tt format\n";
+                }
+            }
+        } else {
+            std::cerr << "[TT] ERROR: Invalid header format\n";
+            return false;
+        }
         
         const double time_scale = effective_tt_unit / tscale_;
-        const double tensor_scale = time_scale * time_scale;
-
+        
+        // Tensor scaling: different for nbody6tt vs PeTar_tt format
+        double tensor_scale;
+        if (is_nbody6tt_format) {
+            // nbody6tt format: use exact nbody6tt conversion formulas
+            // From nbody6tt units.f: TSTAR = SQRT(PC/GM)*PC/(3.15576D+13) * SQRT(RBAR^3/(ZMASS*ZMBAR))
+            // where GM = 1.32712442099D+26, PC = 1296000.0D0/TWOPI*AU
+            // For typical cluster: RBAR=1.0 pc, ZMBAR=1.0 Msun, ZMASS=N*ZMBAR
+            
+            // Calculate TSTAR using nbody6tt formula
+            const double GM = 1.32712442099e26;      // m^3/s^2
+            const double AU = 1.49597870700e13;      // m  
+            const double TWOPI = 6.283185307179586476;
+            const double PC = 1296000.0/TWOPI*AU;    // pc in meters
+            const double SECONDS_PER_MYR = 3.15576e13;  // seconds per Myr
+            
+            // Get simulation parameters from PeTar's built-in unit system
+            // PeTar maintains consistent units throughout - no need for complex detection
+            // Use PeTar's gravitational constant and unit system directly
+            
+            // Default values for typical cluster simulation
+            // These should match the -u 1 (astronomical units) used in petar.init
+            double RBAR = 1.0;    // Distance scale in pc (from -u 1)
+            double ZMBAR = 1.0;    // Mass scale in Msun (from -u 1)  
+            
+            // Detect actual particle count from simulation
+            // Try multiple methods to get the real N
+            double ZMASS = 1000.0;  // Default fallback
+            int detected_N = 1000;   // Default fallback
+            
+            // Method 1: Try to read from first snapshot
+            std::ifstream first_snap("data.0");
+            if (first_snap.good()) {
+                std::string line;
+                while (std::getline(first_snap, line)) {
+                    if (!line.empty() && line[0] != '#') {
+                        std::istringstream iss(line);
+                        std::vector<double> parts;
+                        double val;
+                        while (iss >> val) parts.push_back(val);
+                        
+                        if (parts.size() >= 2) {
+                            detected_N = (int)parts[1];  // N particles
+                            ZMASS = detected_N * 0.5;  // Approximate with IMF average
+                            if (print_flag_) {
+                                std::cerr << "[TT] Detected N=" << detected_N << " from data.0\n";
+                            }
+                            break;
+                        }
+                    }
+                }
+                first_snap.close();
+            }
+            
+            // Method 2: Try to read from input file (petar.init output)
+            std::ifstream init_file("input");
+            if (init_file.good()) {
+                std::string line;
+                while (std::getline(init_file, line)) {
+                    if (!line.empty() && line[0] != '#') {
+                        std::istringstream iss(line);
+                        std::string keyword;
+                        iss >> keyword;
+                        
+                        if (keyword == "N=") {
+                            int N;
+                            iss >> N;
+                            detected_N = N;
+                            ZMASS = N * 0.5;  // Approximate with IMF average
+                            if (print_flag_) {
+                                std::cerr << "[TT] Read N=" << N << " from input file\n";
+                            }
+                            break;
+                        }
+                    }
+                }
+                init_file.close();
+            }
+            
+            // PeTar's gravitational constant in astronomical units
+            // This should match what petar.init -u 1 sets up
+            const double G_petar = 0.00449830997959438;  // Msun, pc, Myr units
+            
+            if (print_flag_) {
+                std::cerr << "[TT] Using PeTar astronomical units (Msun, pc, Myr)\n";
+                std::cerr << "[TT] RBAR=" << RBAR << " pc, ZMBAR=" << ZMBAR 
+                         << " Msun, ZMASS=" << ZMASS << " Msun (N=" << detected_N << ")\n";
+                std::cerr << "[TT] PeTar G=" << G_petar << " (Msun, pc, Myr units)\n";
+            }
+            
+            // Calculate TSTAR exactly as nbody6tt does
+            const double TSTAR = sqrt(PC/GM)*PC/SECONDS_PER_MYR * sqrt(pow(RBAR,3.0)/(ZMASS*ZMBAR));
+            const double TTUNIT = 1.0;  // from header
+            
+            // Apply nbody6tt scaling formula exactly
+            tensor_scale = (TSTAR/TTUNIT) * (TSTAR/TTUNIT);  // (TSTAR/TTUNIT)^2
+            
+            if (print_flag_) {
+                std::cerr << "[TT] Using nbody6tt exact conversion with calculated TSTAR\n";
+                std::cerr << "[TT] RBAR=" << RBAR << " pc, ZMBAR=" << ZMBAR << " Msun, ZMASS=" << ZMASS << " Msun\n";
+                std::cerr << "[TT] Calculated TSTAR=" << TSTAR << " Myr\n";
+                std::cerr << "[TT] TTUNIT=" << TTUNIT << " (Myr), scaling factor: " << tensor_scale << "\n";
+            }
+        } else {
+            // PeTar_tt format: standard scaling
+            tensor_scale = (tscale_ / effective_tt_unit) * (tscale_ / effective_tt_unit);
+        }
+        
         if (print_flag_) {
             std::cerr << "[TT] Time conversion: tt_unit=" << effective_tt_unit 
                      << " tt_offset=" << effective_tt_offset 
                      << " tscale=" << tscale_ << " time_scale=" << time_scale << "\n";
+            std::cerr << "[TT] Tensor scaling: (tscale/tt_unit)^2 = (" 
+                     << tscale_ << "/" << effective_tt_unit << ")^2 = " << tensor_scale << "\n";
         }
 
         std::string line;
@@ -320,7 +456,7 @@ public:
         }
 
         // Handle edge cases
-        if (t <= snaps_.front().time) {
+        if (t < snaps_.front().time) {
             copy(snaps_.front().T);
             if (print_flag_) {
                 std::cerr << "[TT] WARNING: Simulation time " << t 
@@ -331,7 +467,7 @@ public:
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
-        if (t >= snaps_.back().time) {
+        if (t > snaps_.back().time) {
             copy(snaps_.back().T);
             if (print_flag_) {
                 std::cerr << "[TT] Using last snapshot at t=" << t << " (after last snapshot)\n";
