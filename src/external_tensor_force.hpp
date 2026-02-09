@@ -204,20 +204,25 @@ public:
         double val;
         while (header_iss >> val) header_vals.push_back(val);
         
-        // All tt.dat files use Myr units (from convert.py or nbody6tt)
-        // Use standard PeTar_tt scaling - no complex conversion needed
-        double effective_tt_unit = header_vals[1];  // tt_unit in Myr
+        // tt.dat files are in physical units (Myr for time, physical units for tensor)
+        // PeTar should use these directly without N-body conversion
+        double effective_tt_unit = header_vals[1];  // tt_unit in Myr (time conversion factor)
         double effective_tt_offset = header_vals[2]; // tt_offset in Myr
         
-        // Since input is already in Myr units, scaling is simple
-        const double time_scale = effective_tt_unit / tscale_;
-        const double tensor_scale = (tscale_ / effective_tt_unit) * (tscale_ / effective_tt_unit);
+        // Time conversion: tt.dat time (dimensionless) to PeTar internal time units (Myr)
+        // tt.dat times are in units where t=1 corresponds to TTUNIT Myr
+        const double time_scale = effective_tt_unit;  // Convert t=1 to TTUNIT Myr
+        
+        // Tensor scaling: use tensor values directly for maximum flexibility
+        // tt.dat values should be in appropriate units for PeTar physical system
+        // No scaling applied to handle complex orbital cases (elliptical, non-circular, etc.)
+        const double tensor_scale = 1.0;  // Use tensor values as provided
 
         if (print_flag_) {
-            std::cerr << "[TT] Loading tt.dat with Myr units\n";
+            std::cerr << "[TT] Loading tt.dat with physical units\n";
             std::cerr << "[TT] tt_unit=" << effective_tt_unit << " Myr\n";
             std::cerr << "[TT] tt_offset=" << effective_tt_offset << " Myr\n";
-            std::cerr << "[TT] Using standard PeTar_tt scaling\n";
+            std::cerr << "[TT] Using tensor values directly (no scaling)\n";
             std::cerr << "[TT] Time scale: " << time_scale << "\n";
             std::cerr << "[TT] Tensor scale: " << tensor_scale << "\n";
         }
@@ -270,8 +275,9 @@ public:
             double t_input;
             iss >> t_input;
 
-            // Convert input time (Myr) to PeTar internal units
-            s.time = (t_input + effective_tt_offset) / tscale_;
+            // Convert input time (dimensionless) to PeTar internal time units (Myr)
+            // tt.dat times are in units where t=1 corresponds to TTUNIT Myr
+            s.time = (t_input + effective_tt_offset) * time_scale;
 
             // Check for invalid time conversion
             if (std::isnan(s.time) || std::isinf(s.time)) {
@@ -284,7 +290,8 @@ public:
                 for (int j=0;j<3;j++)
                     iss >> s.T[i][j];
             
-            // Convert input tensor (Myr^-2) to PeTar internal units
+            // Apply tensor scaling to convert from normalized to physical units
+            // This scaling is applied to ALL tensor components in ALL snapshots
             for (int i=0;i<3;i++)
                 for (int j=0;j<3;j++)
                     s.T[i][j] *= tensor_scale;
@@ -346,7 +353,7 @@ public:
             return;
         }
 
-        // Find the right interval for interpolation
+        // Find right interval for quadratic interpolation (need 3 points)
         while (last_idx_+1 < snaps_.size() &&
                snaps_[last_idx_+1].time < t) {
             last_idx_++;
@@ -355,47 +362,41 @@ public:
             last_idx_--;
         }
 
-        // Use nearest neighbor if time difference is small enough
-        const auto& s0 = snaps_[last_idx_];
-        const auto& s1 = snaps_[last_idx_+1];
-        
-        double dt_to_s0 = std::abs(t - s0.time);
-        double dt_to_s1 = std::abs(t - s1.time);
-        double dt_snapshots = s1.time - s0.time;
-        
-        // If we're very close to a snapshot (within 1% of dt), use it directly
-        if (dt_to_s0 < 0.01 * dt_snapshots) {
-            copy(s0.T);
+        // Ensure we have 3 points for quadratic interpolation
+        if (last_idx_ == 0) {
+            copy(snaps_[0].T);
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
-        if (dt_to_s1 < 0.01 * dt_snapshots) {
-            copy(s1.T);
+        if (last_idx_+1 >= snaps_.size()) {
+            copy(snaps_.back().T);
             logTidalTensor("tidal_tensor_log.dat", t, Tcur_);
             return;
         }
+
+        // Get three consecutive snapshots for quadratic interpolation
+        const auto& s0 = snaps_[last_idx_-1];   // previous
+        const auto& s1 = snaps_[last_idx_];     // current  
+        const auto& s2 = snaps_[last_idx_+1];   // next
         
-        // Calculate interpolation weight with bounds checking
-        double dt = s1.time - s0.time;
-        double w = 0.0;
-        if (dt > 0.0) {
-            w = (t - s0.time) / dt;
-            // Ensure w is in [0,1] to prevent numerical issues
-            w = std::max(0.0, std::min(1.0, w));
-        }
-
-        if (print_flag_ && false) {  // Disabled interpolation verbose output
-            std::cerr << "[TT] Interpolating at t=" << t 
-                     << " between t0=" << s0.time << " and t1=" << s1.time
-                     << " (w=" << w << ")\n";
-            std::cerr << "[TT] T00: " << s0.T[0][0] << " -> " << s1.T[0][0]
-                     << " = " << (1.0-w)*s0.T[0][0] + w*s1.T[0][0] << "\n";
-        }
-
-        // Perform linear interpolation
+        // Time differences (NBODY6tt style)
+        double dt21 = s1.time - s0.time;  // TTTIME(INDTT) - TTTIME(INDTT-1)
+        double dt32 = s2.time - s1.time;  // TTTIME(INDTT+1) - TTTIME(INDTT)
+        double dt31 = s2.time - s0.time;  // TTTIME(INDTT+1) - TTTIME(INDTT-1)
+        
+        // Quadratic interpolation for each tensor component
         for (int i=0; i<3; i++) {
             for (int j=0; j<3; j++) {
-                Tcur_[i][j] = (1.0-w)*s0.T[i][j] + w*s1.T[i][j];
+                double t1 = s0.T[i][j];
+                double t2 = s1.T[i][j];
+                double t3 = s2.T[i][j];
+                
+                // NBODY6tt quadratic interpolation coefficients
+                double tta = (t2 - t1) / dt21;
+                double ttb = ((t3 - t1) * dt21 - (t2 - t1) * dt31) / (dt31 * dt32 * dt21);
+                
+                // Quadratic interpolation formula
+                Tcur_[i][j] = t1 + tta * (t - s0.time) + ttb * (t - s0.time) * (t - s1.time);
             }
         }
         
