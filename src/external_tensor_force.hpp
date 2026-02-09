@@ -209,9 +209,9 @@ public:
         double effective_tt_unit = header_vals[1];  // tt_unit in Myr (time conversion factor)
         double effective_tt_offset = header_vals[2]; // tt_offset in Myr
         
-        // Time conversion: tt.dat time (dimensionless) to PeTar internal time units (Myr)
-        // tt.dat times are in units where t=1 corresponds to TTUNIT Myr
-        const double time_scale = effective_tt_unit;  // Convert t=1 to TTUNIT Myr
+        // Time conversion: tt.dat time (dimensionless) to PeTar internal time units
+        // Use tscale_ to convert to PeTar's time units
+        const double time_scale = effective_tt_unit / tscale_;
         
         // Tensor scaling: use tensor values directly for maximum flexibility
         // tt.dat values should be in appropriate units for PeTar physical system
@@ -222,36 +222,21 @@ public:
             std::cerr << "[TT] Loading tt.dat with physical units\n";
             std::cerr << "[TT] tt_unit=" << effective_tt_unit << " Myr\n";
             std::cerr << "[TT] tt_offset=" << effective_tt_offset << " Myr\n";
-            std::cerr << "[TT] Using tensor values directly (no scaling)\n";
+            std::cerr << "[TT] Using proper header parsing (no double-reading)\n";
             std::cerr << "[TT] Time scale: " << time_scale << "\n";
             std::cerr << "[TT] Tensor scale: " << tensor_scale << "\n";
         }
 
+        snaps_.clear();
+
         std::string line;
         int line_count = 0;
-        int expected_snapshots = -1;
+        int expected_snapshots = static_cast<int>(header_vals[0]);  // Set from header
+        int actual_snapshots = 0;  // Count actual snapshots loaded
 
         while (std::getline(fin, line)) {
             line_count++;
             if (line.empty() || line[0]=='#') continue;
-            
-            // First line should be header: n_snapshots time_unit time_offset
-            if (expected_snapshots == -1) {
-                std::istringstream iss(line);
-                std::vector<double> values;
-                double val;
-                while (iss >> val) values.push_back(val);
-                
-                if (values.size() == 3) {
-                    expected_snapshots = static_cast<int>(values[0]);
-                    if (print_flag_) {
-                        std::cerr << "[TT] Header: " << expected_snapshots << " snapshots, "
-                                 << "time_unit=" << values[1] << " Myr, "
-                                 << "time_offset=" << values[2] << " Myr\n";
-                    }
-                    continue;
-                }
-            }
             
             // Data lines should have exactly 10 values (time + 9 tensor elements)
             std::istringstream iss(line);
@@ -259,13 +244,25 @@ public:
             double val;
             while (iss >> val) values.push_back(val);
             
-            if (values.size() != 10) {
+            if (values.size() == 3) {
+                expected_snapshots = static_cast<int>(values[0]);
                 if (print_flag_) {
-                    std::cerr << "[TT] Skipping line " << line_count 
-                             << " (incorrect number of values: " << values.size() << ")\n";
+                    std::cerr << "[TT] Header: " << expected_snapshots << " snapshots, "
+                                 << "time_unit=" << values[1] << " Myr, "
+                                 << "time_offset=" << values[2] << " Myr\n";
                 }
                 continue;
             }
+            
+            if (values.size() != 10) {
+                if (print_flag_) {
+                    std::cerr << "[TT] ERROR: Line " << line_count 
+                             << " has incorrect number of values: " << values.size() << " (expected 10)\n";
+                }
+                continue;
+            }
+            
+            actual_snapshots++;  // Count this snapshot
 
             Snapshot s;
             // Reuse the existing stringstream
@@ -301,6 +298,23 @@ public:
 
         if (snaps_.size() < 2) return false;
 
+        // Validate snapshot count and warn on mismatch
+        if (actual_snapshots != expected_snapshots) {
+            if (print_flag_) {
+                std::cerr << "[TT] WARNING: Expected " << expected_snapshots 
+                         << " snapshots, found " << actual_snapshots << "\n";
+                std::cerr << "[TT] Header NBTT may be incorrect or file truncated\n";
+            }
+        }
+        
+        if (actual_snapshots < expected_snapshots) {
+            if (print_flag_) {
+                std::cerr << "[TT] WARNING: Fewer snapshots than expected (" 
+                         << actual_snapshots << " < " << expected_snapshots << ")\n";
+                std::cerr << "[TT] Simulation may have insufficient temporal resolution\n";
+            }
+        }
+
         last_idx_ = 0;
         last_time_ = -1.0;
         return true;
@@ -312,6 +326,8 @@ public:
     void update(double time_in) {
         if (!enabled_) return;
 
+        // time_in should be in the same units as stored snapshot times
+        // No additional scaling needed - use time directly
         double t = time_in;
         if (t == last_time_) return;
         last_time_ = t;
