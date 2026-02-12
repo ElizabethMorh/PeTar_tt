@@ -204,27 +204,24 @@ public:
         double val;
         while (header_iss >> val) header_vals.push_back(val);
         
-        // tt.dat files are in physical units (Myr for time, physical units for tensor)
-        // PeTar should use these directly without N-body conversion
-        double effective_tt_unit = header_vals[1];  // tt_unit in Myr (time conversion factor)
-        double effective_tt_offset = header_vals[2]; // tt_offset in Myr
+        // Extract header values from tt.dat
+        double effective_tt_unit = header_vals[1];  // TTUNIT (Myr)
+        double effective_tt_offset = header_vals[2]; // TTOFFSET (Myr)
         
-        // Time conversion: tt.dat time (dimensionless) to PeTar internal time units
-        // Use tscale_ to convert to PeTar's time units
+        // Time conversion: convert tt.dat time to PeTar internal time units
+        // Formula: t_PeTar = (t_tt.dat * TTUNIT + TTOFFSET) / tscale_
         const double time_scale = effective_tt_unit / tscale_;
         
-        // Tensor scaling: use tensor values directly for maximum flexibility
-        // tt.dat values should be in appropriate units for PeTar physical system
-        // No scaling applied to handle complex orbital cases (elliptical, non-circular, etc.)
-        const double tensor_scale = 1.0;  // Use tensor values as provided
+        // Tensor scaling: convert from (galactic_time)^-2 to Myr^-2
+        // tt.dat tensors are in units of (TTUNIT)^-2, so scale to Myr^-2
+        const double tensor_scale = 1.0 / (effective_tt_unit * effective_tt_unit);
 
         if (print_flag_) {
-            std::cerr << "[TT] Loading tt.dat with physical units\n";
-            std::cerr << "[TT] tt_unit=" << effective_tt_unit << " Myr\n";
-            std::cerr << "[TT] tt_offset=" << effective_tt_offset << " Myr\n";
-            std::cerr << "[TT] Using proper header parsing (no double-reading)\n";
-            std::cerr << "[TT] Time scale: " << time_scale << "\n";
-            std::cerr << "[TT] Tensor scale: " << tensor_scale << "\n";
+            std::cerr << "[TT] Loading tt.dat with proper unit conversions\n";
+            std::cerr << "[TT] TTUNIT   : " << effective_tt_unit << " Myr\n";
+            std::cerr << "[TT] TTOFFSET : " << effective_tt_offset << " Myr\n";
+            std::cerr << "[TT] Time scale (to PeTar units): " << time_scale << "\n";
+            std::cerr << "[TT] Tensor scale (to Myr^-2): " << tensor_scale << "\n";
         }
 
         snaps_.clear();
@@ -272,9 +269,10 @@ public:
             double t_input;
             iss >> t_input;
 
-            // Convert input time (dimensionless) to PeTar internal time units (Myr)
-            // tt.dat times are in units where t=1 corresponds to TTUNIT Myr
-            s.time = (t_input + effective_tt_offset) * time_scale;
+            // Convert input time to PeTar internal time units
+            // Apply TTOFFSET first, then scale by TTUNIT/tscale_
+            // Formula: t_PeTar = (t_tt.dat * TTUNIT + TTOFFSET) / tscale_
+            s.time = (t_input * effective_tt_unit + effective_tt_offset) / tscale_;
 
             // Check for invalid time conversion
             if (std::isnan(s.time) || std::isinf(s.time)) {
