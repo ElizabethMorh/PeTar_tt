@@ -1106,7 +1106,7 @@ public:
             assert(!std::isnan(pot));
             
             // Debug: Print tidal tensor force for first particle
-            if (i == 0 && print_flag) {
+            if (i == 0 && input_parameters.print_flag) {
                 std::cerr << "[TT DEBUG] Particle 0 tidal force: [" 
                           << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
                 std::cerr << "[TT DEBUG] Particle 0 position: [" 
@@ -1153,7 +1153,7 @@ public:
         tt_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
         
         // Debug: Print CM tidal acceleration
-        if (print_flag) {
+        if (input_parameters.print_flag) {
             std::cerr << "[TT DEBUG] CM tidal acceleration: [" << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
             std::cerr << "[TT DEBUG] CM tidal potential: " << pot << "\n";
         }
