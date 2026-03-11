@@ -456,37 +456,17 @@ public:
         acc[2] *= fscale_;
         pot    *= pscale_;
         
-        // Debug output for tidal tensor force calculation
-        static int debug_counter = 0;
-        if (print_flag_ && debug_counter < 10) { // Print first 10 calls to avoid spam
-            std::cerr << "[TT DEBUG] calcAccPot call #" << debug_counter << "\n";
-            std::cerr << "[TT DEBUG] time: " << time << "\n";
-            std::cerr << "[TT DEBUG] pos: [" << pos[0] << ", " << pos[1] << ", " << pos[2] << "]\n";
-            std::cerr << "[TT DEBUG] pos_ref: [" << pos_ref[0] << ", " << pos_ref[1] << ", " << pos_ref[2] << "]\n";
-            std::cerr << "[TT DEBUG] x (scaled): [" << x[0] << ", " << x[1] << ", " << x[2] << "]\n";
-            std::cerr << "[TT DEBUG] Current tensor Tcur_:\n";
-            for (int k=0; k<3; k++) {
-                std::cerr << "[TT DEBUG]   [" << Tcur_[k][0] << ", " << Tcur_[k][1] << ", " << Tcur_[k][2] << "]\n";
+        // Simple debug output
+        if (print_flag_) {
+            static bool first_debug = true;
+            if (first_debug) {
+                std::cerr << "[TT DEBUG] First calcAccPot call:\n";
+                std::cerr << "[TT DEBUG] time: " << time << "\n";
+                std::cerr << "[TT DEBUG] acc: [" << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
+                std::cerr << "[TT DEBUG] pot: " << pot << "\n";
+                std::cerr << "[TT DEBUG] Scaling factors: rscale_=" << rscale_ << ", fscale_=" << fscale_ << ", pscale_=" << pscale_ << "\n";
+                first_debug = false;
             }
-            std::cerr << "[TT DEBUG] Raw acceleration (before scaling): [" 
-                      << acc[0]/fscale_ << ", " << acc[1]/fscale_ << ", " << acc[2]/fscale_ << "]\n";
-            std::cerr << "[TT DEBUG] Final acceleration: [" << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
-            std::cerr << "[TT DEBUG] Final potential: " << pot << "\n";
-            std::cerr << "[TT DEBUG] Scaling factors: rscale_=" << rscale_ << ", fscale_=" << fscale_ << ", pscale_=" << pscale_ << "\n";
-            std::cerr << "[TT DEBUG] ----------------------------------------\n";
-            debug_counter++;
-        }
-        
-        // Safety checks to prevent numerical instability
-        for (int k=0; k<3; k++) {
-            if (std::isnan(acc[k]) || std::isinf(acc[k])) {
-                std::cerr << "[TT] ERROR: Invalid acceleration detected - resetting to zero\n";
-                acc[k] = 0.0;
-            }
-        }
-        if (std::isnan(pot) || std::isinf(pot)) {
-            std::cerr << "[TT] ERROR: Invalid potential detected - resetting to zero\n";
-            pot = 0.0;
         }
     }
 
