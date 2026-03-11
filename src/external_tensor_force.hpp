@@ -465,8 +465,8 @@ public:
             std::cerr << "[TT DEBUG] pos_ref: [" << pos_ref[0] << ", " << pos_ref[1] << ", " << pos_ref[2] << "]\n";
             std::cerr << "[TT DEBUG] x (scaled): [" << x[0] << ", " << x[1] << ", " << x[2] << "]\n";
             std::cerr << "[TT DEBUG] Current tensor Tcur_:\n";
-            for (int i=0; i<3; i++) {
-                std::cerr << "[TT DEBUG]   [" << Tcur_[i][0] << ", " << Tcur_[i][1] << ", " << Tcur_[i][2] << "]\n";
+            for (int k=0; k<3; k++) {
+                std::cerr << "[TT DEBUG]   [" << Tcur_[k][0] << ", " << Tcur_[k][1] << ", " << Tcur_[k][2] << "]\n";
             }
             std::cerr << "[TT DEBUG] Raw acceleration (before scaling): [" 
                       << acc[0]/fscale_ << ", " << acc[1]/fscale_ << ", " << acc[2]/fscale_ << "]\n";
@@ -478,10 +478,10 @@ public:
         }
         
         // Safety checks to prevent numerical instability
-        for (int i=0; i<3; i++) {
-            if (std::isnan(acc[i]) || std::isinf(acc[i])) {
+        for (int k=0; k<3; k++) {
+            if (std::isnan(acc[k]) || std::isinf(acc[k])) {
                 std::cerr << "[TT] ERROR: Invalid acceleration detected - resetting to zero\n";
-                acc[i] = 0.0;
+                acc[k] = 0.0;
             }
         }
         if (std::isnan(pot) || std::isinf(pot)) {
