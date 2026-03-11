@@ -1104,6 +1104,17 @@ public:
             assert(!std::isnan(acc[0]));
             assert(!std::isinf(pot));
             assert(!std::isnan(pot));
+            
+            // Debug: Print tidal tensor force for first few particles
+            if (i < 3 && print_flag) {
+                std::cerr << "[TT DEBUG] Particle " << i << " tidal force: [" 
+                          << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
+                std::cerr << "[TT DEBUG] Particle " << i << " position: [" 
+                          << pi.pos[0] << ", " << pi.pos[1] << ", " << pi.pos[2] << "]\n";
+                std::cerr << "[TT DEBUG] Particle " << i << " total acc after adding TT: [" 
+                          << pi.acc[0] << ", " << pi.acc[1] << ", " << pi.acc[2] << "]\n";
+            }
+            
             pi.acc[0] += acc[0]; 
             pi.acc[1] += acc[1]; 
             pi.acc[2] += acc[2]; 
@@ -1142,6 +1153,14 @@ public:
         PS::F64vec pos_zero=PS::F64vec(0.0);
         // set zero mass to avoid duplicate anti force to potential set
         tt_manager.calcAccPot(&acc[0], pot, stat.time, 0, &stat.pcm.pos[0], &pos_zero[0]);
+        
+        // Debug: Print CM tidal acceleration
+        if (print_flag) {
+            std::cerr << "[TT DEBUG] CM tidal acceleration: [" << acc[0] << ", " << acc[1] << ", " << acc[2] << "]\n";
+            std::cerr << "[TT DEBUG] CM position: [" << stat.pcm.pos[0] << ", " << stat.pcm.pos[1] << ", " << stat.pcm.pos[2] << "]\n";
+            std::cerr << "[TT DEBUG] CM tidal potential: " << pot << "\n";
+        }
+        
         dv = acc*_dt;
 #endif        
 
